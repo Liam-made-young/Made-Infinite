@@ -142,3 +142,6 @@ Thumbs.db
 # Local development files
 debug-test.html 
 .vercel
+node_modules/
+*.log
+.DS_Store
