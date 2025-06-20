@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>MADE INFINITE</title>
+        <link rel="stylesheet" href="style.css">
+    </head>
+    <body class="body-class">
+        <!-- Header -->
+        <header>
+            <div class="header-controls">
+                <button class="ctrl-btn light-toggle">◐</button>
+                <button class="ctrl-btn admin-toggle" onclick="toggleAdminLogin()">◊</button>
+            </div>
+        </header>
+
+        <div class="main-container">
+            <h1 class="title">MADE INFINITE</h1>
+            <div class="subtitle">∞</div>
+        </div>
+
+        <!-- Admin Login Modal -->
+        <div id="adminModal" class="modal">
+            <div class="modal-content">
+                <span class="close" onclick="closeAdminModal()">×</span>
+                <div class="modal-title">ACCESS</div>
+                <input type="password" id="adminPassword" placeholder="•••••••">
+                <button onclick="adminLogin()" class="access-btn">ENTER</button>
+            </div>
+        </div>
+
+        <!-- Admin Panel -->
+        <div id="adminPanel" class="admin-panel" style="display: none;">
+            <div class="panel-header">
+                <div class="panel-title">CONTROL</div>
+                <button onclick="logoutAdmin()" class="exit-btn">EXIT</button>
+            </div>
+            
+            <div class="upload-zone">
+                <div class="upload-controls">
+                    <input type="file" id="fileInput" multiple accept="audio/*,.mp3,.wav,.flac,.aac,.ogg,.m4a" hidden>
+                    <input type="file" id="coverInput" accept="image/*,.jpg,.jpeg,.png,.webp" hidden>
+                    <button id="audioSelectBtn" class="upload-btn">
+                        <span>AUDIO</span>
+                    </button>
+                    <button id="coverSelectBtn" class="upload-btn cover-btn">
+                        <span>COVER</span>
+                    </button>
+                    <button id="uploadBtn" class="action-btn">UPLOAD</button>
+                </div>
+                <div id="uploadStatus" class="status-display"></div>
+                <div class="preview-zone">
+                    <div id="audioPreview" class="preview-box">
+                        <div class="preview-label">AUDIO</div>
+                        <div class="preview-content">SELECT FILES</div>
+                    </div>
+                    <div id="coverPreview" class="preview-box">
+                        <div class="preview-label">COVER</div>
+                        <div class="preview-content">SELECT IMAGE</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="library-controls">
+                <div class="control-header">LIBRARY</div>
+                <div id="adminFileList" class="admin-grid"></div>
+            </div>
+        </div>
+
+        <!-- Music Player Modal -->
+        <div id="musicPlayerModal" class="modal music-player-modal">
+            <div class="player-container">
+                <span class="close" onclick="closeMusicPlayer()">×</span>
+                <div class="player-visual">
+                    <div id="albumArt" class="album-display">
+                        <div class="default-art">♫</div>
+                    </div>
+                    <div id="trackTitle" class="track-title">SELECT TRACK</div>
+                </div>
+                
+                <!-- Hidden Audio Element (no controls) -->
+                <audio id="musicPlayer" preload="metadata"></audio>
+                
+                <!-- Custom Progress Controls -->
+                <div class="progress-section">
+                    <div class="time-display">
+                        <span id="currentTime">0:00</span>
+                        <span id="totalTime">0:00</span>
+                    </div>
+                    <div class="progress-container">
+                        <input type="range" id="progressSlider" class="progress-slider" min="0" max="100" value="0">
+                        <div class="progress-track">
+                            <div id="progressFill" class="progress-fill"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Custom Playback Controls -->
+                <div class="player-controls">
+                    <button id="prevBtn" class="ctrl-btn">⏮</button>
+                    <button id="playPauseBtn" class="ctrl-btn main-play">▶</button>
+                    <button id="nextBtn" class="ctrl-btn">⏭</button>
+                </div>
+                
+                <!-- Volume Controls -->
+                <div class="volume-section">
+                    <button id="muteBtn" class="volume-btn">🔊</button>
+                    <div class="volume-container">
+                        <input type="range" id="volumeSlider" class="volume-slider" min="0" max="100" value="100">
+                        <div class="volume-track">
+                            <div id="volumeFill" class="volume-fill"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="currentTrackName" class="track-info">•••</div>
+            </div>
+        </div>
+
+        <!-- Music Library Grid -->
+        <div id="publicLibrary" class="library-section">
+            <div class="section-header">LIBRARY</div>
+            <div id="fileDisplay" class="music-grid"></div>
+        </div>
+
+    </body>
+    <script src="script-test.js"></script>
+</html>
