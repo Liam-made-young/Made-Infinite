@@ -1,4 +1,11 @@
 {
+  "version": 2,
+  "builds": [
+    {
+      "src": "server.js",
+      "use": "@vercel/node"
+    }
+  ],
   "routes": [
     {
       "src": "/health",
@@ -6,6 +13,14 @@
     },
     {
       "src": "/files",
+      "dest": "/server.js"
+    },
+    {
+      "src": "/upload",
+      "dest": "/server.js"
+    },
+    {
+      "src": "/admin/(.*)",
       "dest": "/server.js"
     },
     {
