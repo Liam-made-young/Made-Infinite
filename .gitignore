@@ -145,3 +145,6 @@ debug-test.html
 node_modules/
 *.log
 .DS_Store
+
+# Music files storage
+musicFiles.json

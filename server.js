@@ -123,29 +123,67 @@ const requireAdmin = (req, res, next) => {
     }
 };
 
-// In-memory storage for file metadata
+// Persistent storage for file metadata
+const fs = require('fs');
+const STORAGE_FILE = path.join(__dirname, 'musicFiles.json');
+
 let musicFiles = [];
 
-// Add some demo files for testing
-if (!isCloudinaryConfigured) {
+// Load existing files from storage
+function loadMusicFiles() {
+    try {
+        if (fs.existsSync(STORAGE_FILE)) {
+            const data = fs.readFileSync(STORAGE_FILE, 'utf8');
+            musicFiles = JSON.parse(data);
+            console.log(`📁 Loaded ${musicFiles.length} files from storage`);
+        } else {
+            console.log('📁 No existing storage file found, starting fresh');
+            musicFiles = [];
+        }
+    } catch (error) {
+        console.error('❌ Error loading files from storage:', error);
+        musicFiles = [];
+    }
+}
+
+// Save files to storage
+function saveMusicFiles() {
+    try {
+        fs.writeFileSync(STORAGE_FILE, JSON.stringify(musicFiles, null, 2));
+        console.log(`💾 Saved ${musicFiles.length} files to storage`);
+    } catch (error) {
+        console.error('❌ Error saving files to storage:', error);
+    }
+}
+
+// Load files on startup
+loadMusicFiles();
+
+// Add some demo files for testing (only if no files exist and Cloudinary not configured)
+if (!isCloudinaryConfigured && musicFiles.length === 0) {
     musicFiles = [
         {
             id: 'demo_1',
             name: 'Demo Song 1.mp3',
+            title: 'Demo Song 1',
             size: 3500000,
             mimeType: 'audio/mpeg',
             createdTime: new Date().toISOString(),
+            uploadDate: new Date().toISOString(),
             streamUrl: 'https://www.soundjay.com/misc/sounds/bell-ringing-05.wav'
         },
         {
             id: 'demo_2',
             name: 'Demo Song 2.mp3',
+            title: 'Demo Song 2',
             size: 4200000,
             mimeType: 'audio/mpeg',
             createdTime: new Date().toISOString(),
+            uploadDate: new Date().toISOString(),
             streamUrl: 'https://www.soundjay.com/misc/sounds/bell-ringing-05.wav'
         }
     ];
+    saveMusicFiles();
 }
 
 // Admin login
@@ -284,7 +322,14 @@ app.post('/api/upload', requireAdmin, upload.fields([
                 coverCloudinaryId: coverResult ? coverResult.public_id : null
             };
 
+            console.log(`📁 Before push: ${musicFiles.length} files`);
             musicFiles.push(fileData);
+            console.log(`📁 After push: ${musicFiles.length} files`);
+            console.log(`📁 All file IDs: ${musicFiles.map(f => f.id).join(', ')}`);
+            
+            // Save to persistent storage
+            saveMusicFiles();
+            
             res.json({ success: true, file: fileData });
             
         } else {
@@ -304,7 +349,14 @@ app.post('/api/upload', requireAdmin, upload.fields([
                 note: 'Demo mode - file not actually stored'
             };
 
+            console.log(`📁 Before push (demo): ${musicFiles.length} files`);
             musicFiles.push(fileData);
+            console.log(`📁 After push (demo): ${musicFiles.length} files`);
+            console.log(`📁 All file IDs (demo): ${musicFiles.map(f => f.id).join(', ')}`);
+            
+            // Save to persistent storage
+            saveMusicFiles();
+            
             res.json({ 
                 success: true, 
                 file: fileData,
@@ -371,6 +423,9 @@ app.delete('/api/files/:fileId', requireAdmin, async (req, res) => {
         musicFiles.splice(fileIndex, 1);
         console.log('✅ File deleted successfully from local storage');
 
+        // Save to persistent storage
+        saveMusicFiles();
+
         res.json({ success: true, message: 'File deleted successfully' });
 
     } catch (error) {
@@ -417,6 +472,8 @@ app.use('*', (req, res) => {
 
 app.listen(PORT, () => {
     console.log(`🎵 MADE INFINITE server running on port ${PORT}`);
+    console.log(`🕐 Server started at: ${new Date().toISOString()}`);
+    console.log(`📁 Initial files count: ${musicFiles.length}`);
     console.log(`🌐 Frontend: http://localhost:${PORT}`);
     console.log(`🔧 API: http://localhost:${PORT}/api`);
     console.log(`📊 Health: http://localhost:${PORT}/api/health`);
@@ -424,6 +481,8 @@ app.listen(PORT, () => {
     
     if (isCloudinaryConfigured) {
         console.log(`☁️  Cloudinary mode: Unlimited storage enabled`);
+        console.log(`🔧 Note: Files stored in memory - will reset on server restart`);
+        console.log(`💡 Consider adding persistent database for production use`);
     } else {
         console.log(`💾 Demo mode: Files simulated (configure Cloudinary for real uploads)`);
         console.log(`🔧 To enable Cloudinary:`);
