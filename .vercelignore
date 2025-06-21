@@ -1,0 +1,26 @@
+# Development files
+.env-simple
+.env-example
+*.log
+.DS_Store
+Thumbs.db
+
+# Test files
+*test*
+*debug*
+*-working*
+
+# Documentation
+*.md
+CLOUDINARY_SETUP.md
+
+# Node modules are automatically ignored
+node_modules/
+
+# IDE files
+.vscode/
+.idea/
+
+# Temporary files
+tmp/
+temp/ 
