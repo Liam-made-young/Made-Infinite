@@ -71,13 +71,15 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-// Session configuration
+
+// Update your session configuration (around line 71-80)
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'made-infinite-secret-key',
+    secret: process.env.SESSION_SECRET || 'Yourawaveydude4145!!!!',
     resave: false,
     saveUninitialized: false,
     cookie: {
-        secure: process.env.NODE_ENV === 'production',
+        secure: false, // Set to false for now to test
+        httpOnly: true,
         maxAge: 24 * 60 * 60 * 1000 // 24 hours
     }
 }));
