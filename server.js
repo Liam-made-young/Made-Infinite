@@ -273,9 +273,11 @@ app.post('/api/upload', requireAdmin, upload.fields([
             const fileData = {
                 id: musicResult.public_id,
                 name: musicFile.originalname,
+                title: req.body.title || musicFile.originalname.replace(/\.[^/.]+$/, ''),
                 size: musicFile.size,
                 mimeType: 'audio/mpeg',
                 createdTime: new Date().toISOString(),
+                uploadDate: req.body.uploadDate || new Date().toISOString(),
                 streamUrl: musicResult.secure_url,
                 cloudinaryId: musicResult.public_id,
                 coverUrl: coverResult ? coverResult.secure_url : null,
@@ -292,9 +294,11 @@ app.post('/api/upload', requireAdmin, upload.fields([
             const fileData = {
                 id: `local_${Date.now()}`,
                 name: musicFile.originalname,
+                title: req.body.title || musicFile.originalname.replace(/\.[^/.]+$/, ''),
                 size: musicFile.size,
                 mimeType: musicFile.mimetype,
                 createdTime: new Date().toISOString(),
+                uploadDate: req.body.uploadDate || new Date().toISOString(),
                 streamUrl: 'https://www.soundjay.com/misc/sounds/bell-ringing-05.wav', // Demo URL
                 coverUrl: coverFile ? 'https://via.placeholder.com/500x500/000000/FFFFFF?text=DEMO' : null,
                 note: 'Demo mode - file not actually stored'

@@ -38,6 +38,11 @@
             </div>
             
             <div class="upload-zone">
+                <!-- Upload Metadata -->
+                <div class="upload-metadata">
+                    <input type="text" id="trackTitle" class="title-input" placeholder="Enter track title (optional)">
+                </div>
+                
                 <div class="upload-controls">
                     <input type="file" id="fileInput" multiple accept="audio/*,.mp3,.wav,.flac,.aac,.ogg,.m4a" hidden>
                     <input type="file" id="coverInput" accept="image/*,.jpg,.jpeg,.png,.webp" hidden>
@@ -49,6 +54,19 @@
                     </button>
                     <button id="uploadBtn" class="action-btn">UPLOAD</button>
                 </div>
+                
+                <!-- Upload Progress Bar -->
+                <div id="uploadProgress" class="upload-progress" style="display: none;">
+                    <div class="progress-label">
+                        <span id="progressText">Uploading...</span>
+                        <span id="progressPercent">0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div id="progressFill" class="progress-fill" style="width: 0%;"></div>
+                    </div>
+                    <div id="currentFile" class="current-file">Processing file...</div>
+                </div>
+                
                 <div id="uploadStatus" class="status-display"></div>
                 <div class="preview-zone">
                     <div id="audioPreview" class="preview-box">

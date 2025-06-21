@@ -317,6 +317,29 @@ function handleCoverFileSelection(event) {
 // Upload prevention flag
 let isUploading = false;
 
+// Progress tracking functions
+function showUploadProgress() {
+    const progressDiv = document.getElementById('uploadProgress');
+    progressDiv.style.display = 'block';
+}
+
+function hideUploadProgress() {
+    const progressDiv = document.getElementById('uploadProgress');
+    progressDiv.style.display = 'none';
+}
+
+function updateUploadProgress(percent, fileName, fileIndex, totalFiles) {
+    const progressFill = document.getElementById('progressFill');
+    const progressPercent = document.getElementById('progressPercent');
+    const progressText = document.getElementById('progressText');
+    const currentFile = document.getElementById('currentFile');
+    
+    progressFill.style.width = `${percent}%`;
+    progressPercent.textContent = `${Math.round(percent)}%`;
+    progressText.textContent = `Uploading ${fileIndex}/${totalFiles}`;
+    currentFile.textContent = fileName;
+}
+
 async function uploadFiles() {
     // Prevent duplicate uploads
     if (isUploading) {
@@ -329,6 +352,8 @@ async function uploadFiles() {
     
     const fileInput = document.getElementById('fileInput');
     const files = fileInput.files;
+    const titleInput = document.getElementById('trackTitle');
+    const customTitle = titleInput.value.trim();
     
     if (files.length === 0) {
         showStatus('SELECT AUDIO FILES', 'error');
@@ -361,11 +386,21 @@ async function uploadFiles() {
         }
     }
     
+    // Show progress bar
+    showUploadProgress();
     showStatus('UPLOADING...', 'success');
     
     for (let i = 0; i < files.length; i++) {
+        const file = files[i];
         const formData = new FormData();
-        formData.append('musicFile', files[i]);
+        formData.append('musicFile', file);
+        
+        // Add custom title or use filename
+        const finalTitle = customTitle || file.name.replace(/\.[^/.]+$/, '');
+        formData.append('title', finalTitle);
+        
+        // Add upload timestamp
+        formData.append('uploadDate', new Date().toISOString());
         
         // Add cover image if selected
         if (selectedCoverFile) {
@@ -373,6 +408,14 @@ async function uploadFiles() {
         }
         
         try {
+            // Update progress for current file start
+            updateUploadProgress(
+                ((i) / files.length) * 100, 
+                file.name, 
+                i + 1, 
+                files.length
+            );
+            
             const response = await fetch(`${API_BASE}/upload`, {
                 method: 'POST',
                 credentials: 'include',
@@ -382,13 +425,24 @@ async function uploadFiles() {
             const data = await response.json();
             
             if (response.ok) {
-                console.log(`✅ Upload ${i + 1}/${files.length} complete:`, files[i].name);
+                // Update progress for completed file
+                updateUploadProgress(
+                    ((i + 1) / files.length) * 100, 
+                    `✅ ${file.name}`, 
+                    i + 1, 
+                    files.length
+                );
+                console.log(`✅ Upload ${i + 1}/${files.length} complete:`, file.name);
+                
+                // Brief pause to show completion
+                await new Promise(resolve => setTimeout(resolve, 500));
             } else {
                 throw new Error(data.error || 'Upload failed');
             }
         } catch (error) {
             console.error(`❌ Upload ${i + 1} failed:`, error);
             showStatus(`UPLOAD FAILED: ${error.message}`, 'error');
+            hideUploadProgress();
             isUploading = false;
             return;
         }
@@ -396,8 +450,14 @@ async function uploadFiles() {
     
     showStatus('UPLOAD COMPLETE', 'success');
     
+    // Hide progress bar after completion
+    setTimeout(() => {
+        hideUploadProgress();
+    }, 2000);
+    
     // Reset inputs
     fileInput.value = '';
+    titleInput.value = '';
     document.getElementById('coverInput').value = '';
     selectedCoverFile = null;
     
@@ -443,9 +503,20 @@ function refreshAdminLibrary() {
         return;
     }
     
+    // Sort by upload date (newest first)
+    const sortedFiles = [...musicFiles].sort((a, b) => {
+        const dateA = new Date(a.uploadDate || a.dateAdded || 0);
+        const dateB = new Date(b.uploadDate || b.dateAdded || 0);
+        return dateB - dateA;
+    });
+    
     let html = '';
-    musicFiles.forEach(file => {
+    sortedFiles.forEach(file => {
         const escapedId = file.id.replace(/'/g, "\\'");
+        const uploadDate = file.uploadDate || file.dateAdded;
+        const formattedDate = uploadDate ? formatUploadDate(uploadDate) : 'Unknown date';
+        const displayName = file.title || file.name;
+        
         html += `
             <div class="admin-file-item">
                 <div class="file-cover">
@@ -455,8 +526,11 @@ function refreshAdminLibrary() {
                     }
                 </div>
                 <div class="file-details">
-                    <div class="file-name">${file.name}</div>
-                    <div class="file-meta">${formatFileSize(file.size)}</div>
+                    <div class="file-name">${displayName}</div>
+                    <div class="file-meta">
+                        <span>${formatFileSize(file.size)}</span>
+                        <span class="upload-date">• ${formattedDate}</span>
+                    </div>
                 </div>
                 <button onclick="deleteFile('${escapedId}')" class="delete-btn">×</button>
             </div>
@@ -475,22 +549,36 @@ function refreshPublicLibrary() {
         return;
     }
     
+    // Sort by upload date (newest first)
+    const sortedFiles = [...musicFiles].sort((a, b) => {
+        const dateA = new Date(a.uploadDate || a.dateAdded || 0);
+        const dateB = new Date(b.uploadDate || b.dateAdded || 0);
+        return dateB - dateA;
+    });
+    
     let html = '';
-    musicFiles.forEach((file, index) => {
+    sortedFiles.forEach((file, index) => {
+        const displayName = file.title || file.name;
+        const uploadDate = file.uploadDate || file.dateAdded;
+        const formattedDate = uploadDate ? formatUploadDate(uploadDate) : '';
+        
         html += `
             <div class="music-card" onclick="playMusic(${index})">
                 <div class="card-cover">
                     ${file.coverUrl ? 
-                        `<img src="${file.coverUrl}" alt="${file.name}">` : 
+                        `<img src="${file.coverUrl}" alt="${displayName}">` : 
                         '<div class="default-cover">♫</div>'
                     }
                 </div>
                 <div class="card-info">
-                    <div class="card-title">${file.name}</div>
-                    <div class="card-meta">${formatFileSize(file.size)}</div>
+                    <div class="card-title">${displayName}</div>
+                    <div class="card-meta">
+                        <span>${formatFileSize(file.size)}</span>
+                        ${formattedDate ? `<span class="upload-date">• ${formattedDate}</span>` : ''}
+                    </div>
                     <div class="card-actions">
                         <button onclick="event.stopPropagation(); playMusic(${index})" class="play-btn">PLAY</button>
-                        <button onclick="event.stopPropagation(); downloadMusic('${file.streamUrl}', '${file.name}')" class="download-btn">SAVE</button>
+                        <button onclick="event.stopPropagation(); downloadMusic('${file.streamUrl}', '${displayName}')" class="download-btn">SAVE</button>
                     </div>
                 </div>
             </div>
@@ -905,6 +993,37 @@ function formatFileSize(bytes) {
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + sizes[i];
+}
+
+function formatUploadDate(dateString) {
+    try {
+        const date = new Date(dateString);
+        const now = new Date();
+        const diffTime = Math.abs(now - date);
+        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+        const diffHours = Math.floor(diffTime / (1000 * 60 * 60));
+        const diffMinutes = Math.floor(diffTime / (1000 * 60));
+        
+        if (diffMinutes < 60) {
+            return `${diffMinutes}m ago`;
+        } else if (diffHours < 24) {
+            return `${diffHours}h ago`;
+        } else if (diffDays < 7) {
+            return `${diffDays}d ago`;
+        } else if (diffDays < 30) {
+            const weeks = Math.floor(diffDays / 7);
+            return `${weeks}w ago`;
+        } else {
+            return date.toLocaleDateString('en-US', { 
+                month: 'short', 
+                day: 'numeric',
+                year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined
+            });
+        }
+    } catch (error) {
+        console.error('Date formatting error:', error);
+        return 'Unknown date';
+    }
 }
 
 function showStatus(message, type) {
