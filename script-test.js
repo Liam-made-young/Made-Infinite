@@ -560,6 +560,9 @@ function refreshAdminLibrary() {
     container.innerHTML = html;
 }
 
+// Store sorted files globally so player can access them correctly
+let sortedMusicFiles = [];
+
 function refreshPublicLibrary() {
     const container = document.getElementById('fileDisplay');
     if (!container) return;
@@ -569,21 +572,21 @@ function refreshPublicLibrary() {
         return;
     }
     
-    // Sort by upload date (newest first)
-    const sortedFiles = [...musicFiles].sort((a, b) => {
+    // Sort by upload date (newest first) and store globally
+    sortedMusicFiles = [...musicFiles].sort((a, b) => {
         const dateA = new Date(a.uploadDate || a.dateAdded || 0);
         const dateB = new Date(b.uploadDate || b.dateAdded || 0);
         return dateB - dateA;
     });
     
     let html = '';
-    sortedFiles.forEach((file, index) => {
+    sortedMusicFiles.forEach((file, index) => {
         const displayName = file.title || file.name;
         const uploadDate = file.uploadDate || file.dateAdded;
         const formattedDate = uploadDate ? formatUploadDate(uploadDate) : '';
         
         html += `
-            <div class="music-card" onclick="playMusic(${index})">
+            <div class="music-card" onclick="playMusicFromSorted(${index})">
                 <div class="card-cover">
                     ${file.coverUrl ? 
                         `<img src="${file.coverUrl}" alt="${displayName}">` : 
@@ -597,8 +600,8 @@ function refreshPublicLibrary() {
                         ${formattedDate ? `<span class="upload-date">• ${formattedDate}</span>` : ''}
                     </div>
                     <div class="card-actions">
-                        <button onclick="event.stopPropagation(); playMusic(${index})" class="play-btn">PLAY</button>
-                        <button onclick="event.stopPropagation(); downloadMusic('${file.streamUrl}', '${displayName}')" class="download-btn">SAVE</button>
+                        <button onclick="event.stopPropagation(); playMusicFromSorted(${index})" class="play-btn">PLAY</button>
+                        <button onclick="event.stopPropagation(); downloadMusicFile('${file.streamUrl}', '${displayName}')" class="download-btn">SAVE</button>
                     </div>
                 </div>
             </div>
@@ -612,15 +615,25 @@ function refreshPublicLibrary() {
 let currentTrackIndex = 0;
 let isPlaying = false;
 let musicPlayer = null;
+let usingOriginalArray = true; // Track which array we're using
 
 function playMusic(index) {
     if (musicFiles[index]) {
         currentTrackIndex = index;
-        openMusicPlayer(index);
+        usingOriginalArray = true;
+        openMusicPlayer(index, musicFiles);
     }
 }
 
-function openMusicPlayer(trackIndex) {
+function playMusicFromSorted(index) {
+    if (sortedMusicFiles[index]) {
+        currentTrackIndex = index;
+        usingOriginalArray = false;
+        openMusicPlayer(index, sortedMusicFiles);
+    }
+}
+
+function openMusicPlayer(trackIndex, filesArray) {
     const modal = document.getElementById('musicPlayerModal');
     const player = document.getElementById('musicPlayer');
     const titleElement = document.getElementById('playerTrackTitle');
@@ -632,7 +645,7 @@ function openMusicPlayer(trackIndex) {
         return;
     }
     
-    const file = musicFiles[trackIndex];
+    const file = filesArray[trackIndex];
     const displayName = file.title || file.name;
     console.log(`🎵 Opening player: ${displayName}`);
     
@@ -949,22 +962,67 @@ function togglePlayPause() {
 }
 
 function previousTrack() {
-    if (musicFiles.length === 0) return;
+    const currentArray = usingOriginalArray ? musicFiles : sortedMusicFiles;
+    if (currentArray.length === 0) return;
     
     // Circular navigation - wrap around to last track
-    currentTrackIndex = (currentTrackIndex - 1 + musicFiles.length) % musicFiles.length;
-    playMusic(currentTrackIndex);
+    currentTrackIndex = (currentTrackIndex - 1 + currentArray.length) % currentArray.length;
+    openMusicPlayer(currentTrackIndex, currentArray);
 }
 
 function nextTrack() {
-    if (musicFiles.length === 0) return;
+    const currentArray = usingOriginalArray ? musicFiles : sortedMusicFiles;
+    if (currentArray.length === 0) return;
     
     // Circular navigation - wrap around to first track
-    currentTrackIndex = (currentTrackIndex + 1) % musicFiles.length;
-    playMusic(currentTrackIndex);
+    currentTrackIndex = (currentTrackIndex + 1) % currentArray.length;
+    openMusicPlayer(currentTrackIndex, currentArray);
 }
 
-function downloadMusic(url, filename) {
+// New direct download function
+async function downloadMusicFile(url, filename) {
+    try {
+        showStatus('DOWNLOADING...', 'success');
+        console.log('💾 Starting download:', filename);
+        
+        // Fetch the file as a blob
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const blob = await response.blob();
+        
+        // Create download link
+        const downloadUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = downloadUrl;
+        a.download = filename;
+        
+        // Trigger download
+        document.body.appendChild(a);
+        a.click();
+        
+        // Cleanup
+        window.URL.revokeObjectURL(downloadUrl);
+        document.body.removeChild(a);
+        
+        showStatus('DOWNLOAD COMPLETE', 'success');
+        console.log('✅ Download completed:', filename);
+        
+    } catch (error) {
+        console.error('❌ Download failed:', error);
+        showStatus('DOWNLOAD FAILED', 'error');
+        
+        // Fallback to old method if fetch fails
+        console.log('🔄 Trying fallback download method...');
+        downloadMusicFallback(url, filename);
+    }
+}
+
+// Fallback download function (old method)
+function downloadMusicFallback(url, filename) {
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
@@ -972,7 +1030,13 @@ function downloadMusic(url, filename) {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    console.log('💾 Download initiated:', filename);
+    console.log('💾 Fallback download initiated:', filename);
+    showStatus('DOWNLOAD STARTED', 'success');
+}
+
+// Keep old function for backward compatibility
+function downloadMusic(url, filename) {
+    downloadMusicFile(url, filename);
 }
 
 // Delete Function
