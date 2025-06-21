@@ -195,11 +195,16 @@ async function adminLogin() {
         if (response.ok) {
             isAdminLoggedIn = true;
             console.log('✅ Admin access granted');
+            console.log('Response data:', data);
             showStatus('ACCESS GRANTED', 'success');
             closeAdminModal();
-            showAdminPanel();
+            
+            // Small delay to ensure modal closes before showing panel
+            setTimeout(() => {
+                showAdminPanel();
+            }, 100);
         } else {
-            console.error('❌ Access denied');
+            console.error('❌ Access denied:', data);
             showStatus('ACCESS DENIED', 'error');
         }
     } catch (error) {
@@ -211,9 +216,24 @@ async function adminLogin() {
 function showAdminPanel() {
     const panel = document.getElementById('adminPanel');
     if (panel) {
+        console.log('✅ Showing admin panel');
         panel.style.display = 'block';
         refreshAdminLibrary();
+        
+        // Debug: Log panel visibility
+        const computedStyle = window.getComputedStyle(panel);
+        console.log('Admin panel display:', computedStyle.display);
+        console.log('Admin panel visibility:', computedStyle.visibility);
+    } else {
+        console.error('❌ Admin panel element not found');
     }
+}
+
+// Debug function to bypass login
+function debugShowAdmin() {
+    console.log('🔧 Debug: Force showing admin panel');
+    isAdminLoggedIn = true;
+    showAdminPanel();
 }
 
 async function logoutAdmin() {
@@ -603,7 +623,7 @@ function playMusic(index) {
 function openMusicPlayer(trackIndex) {
     const modal = document.getElementById('musicPlayerModal');
     const player = document.getElementById('musicPlayer');
-    const titleElement = document.getElementById('trackTitle');
+    const titleElement = document.getElementById('playerTrackTitle');
     const trackNameElement = document.getElementById('currentTrackName');
     const albumArt = document.getElementById('albumArt');
     
@@ -613,16 +633,17 @@ function openMusicPlayer(trackIndex) {
     }
     
     const file = musicFiles[trackIndex];
-    console.log(`🎵 Opening player: ${file.name}`);
+    const displayName = file.title || file.name;
+    console.log(`🎵 Opening player: ${displayName}`);
     
     // Update UI
     player.src = file.streamUrl;
-    titleElement.textContent = file.name.toUpperCase();
-    trackNameElement.textContent = file.name;
+    titleElement.textContent = displayName.toUpperCase();
+    trackNameElement.textContent = displayName;
     
     // Update album art
     if (file.coverUrl) {
-        albumArt.innerHTML = `<img src="${file.coverUrl}" alt="${file.name}">`;
+        albumArt.innerHTML = `<img src="${file.coverUrl}" alt="${displayName}">`;
     } else {
         albumArt.innerHTML = '<div class="default-art">♫</div>';
     }
