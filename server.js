@@ -61,8 +61,21 @@ app.use(cors({
     credentials: true
 }));
 
-app.use(express.json({ limit: '200mb' }));
-app.use(express.urlencoded({ extended: true, limit: '200mb' }));
+// Increase payload limits for large file uploads
+app.use(express.json({ limit: '200mb', parameterLimit: 50000 }));
+app.use(express.urlencoded({ extended: true, limit: '200mb', parameterLimit: 50000 }));
+
+// Handle payload too large errors
+app.use((error, req, res, next) => {
+    if (error && error.type === 'entity.too.large') {
+        console.log('❌ Payload too large error caught');
+        return res.status(413).json({ 
+            error: 'File too large. Maximum size is 200MB.',
+            code: 'PAYLOAD_TOO_LARGE'
+        });
+    }
+    next(error);
+});
 
 // Rate limiting
 const limiter = rateLimit({
@@ -102,6 +115,9 @@ const upload = multer({
     storage: multer.memoryStorage(),
     limits: {
         fileSize: 200 * 1024 * 1024, // 200MB limit
+        fieldSize: 200 * 1024 * 1024, // 200MB field limit
+        fields: 10, // Max number of non-file fields
+        files: 2 // Max number of files (music + cover)
     },
     fileFilter: (req, file, cb) => {
         if (file.mimetype.startsWith('audio/') || file.mimetype.startsWith('image/')) {
@@ -223,6 +239,8 @@ app.post('/api/upload', requireAdmin, upload.fields([
     { name: 'coverImage', maxCount: 1 }
 ]), async (req, res) => {
     console.log('📤 File upload attempt');
+    console.log('📊 Request size:', req.get('Content-Length') || 'Unknown');
+    console.log('📊 Content type:', req.get('Content-Type') || 'Unknown');
     
     try {
         if (!req.files || !req.files.musicFile) {
@@ -457,9 +475,27 @@ app.use((error, req, res, next) => {
     console.error('💥 Server error:', error);
     
     if (error instanceof multer.MulterError) {
+        console.log('🔍 Multer error code:', error.code);
         if (error.code === 'LIMIT_FILE_SIZE') {
-            return res.status(400).json({ error: 'File too large (max 200MB)' });
+            return res.status(413).json({ 
+                error: 'File too large (max 200MB)',
+                code: 'LIMIT_FILE_SIZE',
+                maxSize: '200MB'
+            });
         }
+        if (error.code === 'LIMIT_FIELD_VALUE') {
+            return res.status(413).json({ 
+                error: 'Field value too large (max 200MB)',
+                code: 'LIMIT_FIELD_VALUE'
+            });
+        }
+    }
+    
+    if (error.type === 'entity.too.large') {
+        return res.status(413).json({ 
+            error: 'Request payload too large (max 200MB)',
+            code: 'ENTITY_TOO_LARGE'
+        });
     }
     
     res.status(500).json({ error: 'Something went wrong!' });
@@ -470,7 +506,7 @@ app.use('*', (req, res) => {
     res.status(404).json({ error: 'Route not found' });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`🎵 MADE INFINITE server running on port ${PORT}`);
     console.log(`🕐 Server started at: ${new Date().toISOString()}`);
     console.log(`📁 Initial files count: ${musicFiles.length}`);
@@ -491,5 +527,10 @@ app.listen(PORT, () => {
         console.log(`   3. Update your .env file with real credentials`);
     }
 });
+
+// Increase server timeout for large file uploads (10 minutes)
+server.timeout = 600000;
+server.keepAliveTimeout = 600000;
+server.headersTimeout = 610000;
 
 module.exports = app; 

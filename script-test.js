@@ -442,6 +442,11 @@ async function uploadFiles() {
                 body: formData
             });
             
+            // Handle 413 Payload Too Large specifically
+            if (response.status === 413) {
+                throw new Error('File too large for server. Try a smaller file or check your internet connection.');
+            }
+            
             const data = await response.json();
             
             if (response.ok) {
