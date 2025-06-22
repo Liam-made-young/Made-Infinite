@@ -6,16 +6,26 @@ const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const session = require('express-session');
 const path = require('path');
+const fs = require('fs');
 require('dotenv').config();
 
-// Try to load Cloudinary, but don't fail if it's not configured
-let cloudinary = null;
-let isCloudinaryConfigured = false;
+// Storage configuration
+const STORAGE_MODES = {
+    CLOUDINARY: 'cloudinary',
+    GCS: 'gcs',
+    LOCAL: 'local'
+};
 
+// Initialize storage providers
+let cloudinary = null;
+let gcsStorage = null;
+let isCloudinaryConfigured = false;
+let isGCSConfigured = false;
+
+// Try to configure Cloudinary
 try {
     cloudinary = require('cloudinary').v2;
     
-    // Check if Cloudinary credentials are provided
     if (process.env.CLOUDINARY_CLOUD_NAME && 
         process.env.CLOUDINARY_API_KEY && 
         process.env.CLOUDINARY_API_SECRET &&
@@ -29,12 +39,49 @@ try {
         
         isCloudinaryConfigured = true;
         console.log('☁️  Cloudinary configured successfully');
-    } else {
-        console.log('⚠️  Cloudinary not configured - using local storage mode');
     }
 } catch (error) {
-    console.log('⚠️  Cloudinary not available - using local storage mode');
+    console.log('⚠️  Cloudinary not available');
 }
+
+// Try to configure Google Cloud Storage
+try {
+    const { Storage } = require('@google-cloud/storage');
+    
+    let gcsConfig = {};
+    
+    if (process.env.GOOGLE_CLOUD_KEYFILE) {
+        gcsConfig.keyFilename = process.env.GOOGLE_CLOUD_KEYFILE;
+    } else if (process.env.GOOGLE_CLOUD_CREDENTIALS) {
+        // For Railway/Heroku deployment
+        const credentials = JSON.parse(process.env.GOOGLE_CLOUD_CREDENTIALS);
+        gcsConfig.credentials = credentials;
+        gcsConfig.projectId = credentials.project_id;
+    }
+    
+    if (process.env.GOOGLE_CLOUD_PROJECT_ID) {
+        gcsConfig.projectId = process.env.GOOGLE_CLOUD_PROJECT_ID;
+    }
+    
+    if (Object.keys(gcsConfig).length > 0 && process.env.GCS_BUCKET_NAME) {
+        gcsStorage = new Storage(gcsConfig);
+        isGCSConfigured = true;
+        console.log('🌩️  Google Cloud Storage configured successfully');
+        console.log(`📦 Using bucket: ${process.env.GCS_BUCKET_NAME}`);
+    } else {
+        console.log('⚠️  Google Cloud Storage not configured');
+    }
+} catch (error) {
+    console.log('⚠️  Google Cloud Storage not available:', error.message);
+}
+
+// Determine storage mode
+const storageMode = process.env.STORAGE_MODE || 
+    (isGCSConfigured ? STORAGE_MODES.GCS : 
+     isCloudinaryConfigured ? STORAGE_MODES.CLOUDINARY : 
+     STORAGE_MODES.LOCAL);
+
+console.log(`🗄️  Storage mode: ${storageMode.toUpperCase()}`);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -48,7 +95,7 @@ app.use(helmet({
             scriptSrcAttr: ["'unsafe-inline'"], // Allow inline event handlers
             styleSrc: ["'self'", "'unsafe-inline'"],
             imgSrc: ["'self'", "data:", "https:"],
-            mediaSrc: ["'self'", "blob:", "https://res.cloudinary.com", "https://www.soundjay.com"],
+            mediaSrc: ["'self'", "blob:", "https://res.cloudinary.com", "https://www.soundjay.com", "https://storage.googleapis.com"],
             connectSrc: ["'self'", "https:"],
             fontSrc: ["'self'", "https:", "data:"]
         }
@@ -110,14 +157,14 @@ const express_static = express.static(__dirname, {
 });
 app.use(express_static);
 
-// File upload configuration
+// File upload configuration with higher limits for GCS
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: {
-        fileSize: 200 * 1024 * 1024, // 200MB limit
-        fieldSize: 200 * 1024 * 1024, // 200MB field limit
-        fields: 10, // Max number of non-file fields
-        files: 2 // Max number of files (music + cover)
+        fileSize: storageMode === STORAGE_MODES.GCS ? 500 * 1024 * 1024 : 200 * 1024 * 1024, // 500MB for GCS, 200MB others
+        fieldSize: storageMode === STORAGE_MODES.GCS ? 500 * 1024 * 1024 : 200 * 1024 * 1024,
+        fields: 10,
+        files: 2
     },
     fileFilter: (req, file, cb) => {
         if (file.mimetype.startsWith('audio/') || file.mimetype.startsWith('image/')) {
@@ -140,9 +187,7 @@ const requireAdmin = (req, res, next) => {
 };
 
 // Persistent storage for file metadata
-const fs = require('fs');
 const STORAGE_FILE = path.join(__dirname, 'musicFiles.json');
-
 let musicFiles = [];
 
 // Load existing files from storage
@@ -233,14 +278,177 @@ app.post('/api/admin/logout', (req, res) => {
     });
 });
 
-// Upload music file with optional cover image
+// Storage handler functions
+async function uploadToCloudinary(musicFile, coverFile, metadata) {
+    console.log('☁️  Uploading to Cloudinary...');
+    
+    const musicResult = await new Promise((resolve, reject) => {
+        cloudinary.uploader.upload_stream(
+            {
+                resource_type: 'video',
+                folder: 'made-infinite-music',
+                public_id: `music_${Date.now()}_${musicFile.originalname.replace(/\.[^/.]+$/, "")}`,
+                format: 'mp3',
+                transformation: [{ quality: 'auto:good' }]
+            },
+            (error, result) => {
+                if (error) {
+                    console.error('Cloudinary upload error:', error);
+                    reject(new Error(`Cloudinary upload failed: ${error.message}`));
+                } else {
+                    resolve(result);
+                }
+            }
+        ).end(musicFile.buffer);
+    });
+
+    let coverResult = null;
+    if (coverFile) {
+        try {
+            coverResult = await new Promise((resolve, reject) => {
+                cloudinary.uploader.upload_stream(
+                    {
+                        resource_type: 'image',
+                        folder: 'made-infinite-covers',
+                        public_id: `cover_${Date.now()}_${coverFile.originalname.replace(/\.[^/.]+$/, "")}`,
+                        transformation: [{ width: 500, height: 500, crop: 'fill', quality: 'auto:good' }]
+                    },
+                    (error, result) => {
+                        if (error) reject(error);
+                        else resolve(result);
+                    }
+                ).end(coverFile.buffer);
+            });
+        } catch (error) {
+            console.error('Cover upload failed:', error);
+        }
+    }
+
+    return {
+        id: musicResult.public_id,
+        name: musicFile.originalname,
+        title: metadata.title || musicFile.originalname.replace(/\.[^/.]+$/, ''),
+        size: musicFile.size,
+        mimeType: 'audio/mpeg',
+        createdTime: new Date().toISOString(),
+        uploadDate: metadata.uploadDate || new Date().toISOString(),
+        streamUrl: musicResult.secure_url,
+        cloudinaryId: musicResult.public_id,
+        coverUrl: coverResult ? coverResult.secure_url : null,
+        coverCloudinaryId: coverResult ? coverResult.public_id : null,
+        storageType: 'cloudinary'
+    };
+}
+
+async function uploadToGCS(musicFile, coverFile, metadata) {
+    console.log('🌩️  Uploading to Google Cloud Storage...');
+    
+    const bucket = gcsStorage.bucket(process.env.GCS_BUCKET_NAME);
+    const timestamp = Date.now();
+    
+    // Upload music file
+    const musicFileName = `music/${timestamp}_${musicFile.originalname}`;
+    const musicFileRef = bucket.file(musicFileName);
+    
+    await musicFileRef.save(musicFile.buffer, {
+        metadata: {
+            contentType: musicFile.mimetype,
+            metadata: {
+                originalName: musicFile.originalname,
+                uploadDate: metadata.uploadDate || new Date().toISOString(),
+                title: metadata.title || musicFile.originalname.replace(/\.[^/.]+$/, '')
+            }
+        }
+    });
+    
+    // DON'T make public - we'll use signed URLs instead
+    console.log('✅ Music uploaded to GCS (private)');
+    
+    // Upload cover file if provided
+    let coverFileName = null;
+    if (coverFile) {
+        try {
+            coverFileName = `covers/${timestamp}_${coverFile.originalname}`;
+            const coverFileRef = bucket.file(coverFileName);
+            
+            await coverFileRef.save(coverFile.buffer, {
+                metadata: {
+                    contentType: coverFile.mimetype,
+                    metadata: {
+                        originalName: coverFile.originalname,
+                        uploadDate: new Date().toISOString()
+                    }
+                }
+            });
+            
+            console.log('✅ Cover uploaded to GCS (private)');
+        } catch (error) {
+            console.error('Cover upload failed:', error);
+        }
+    }
+    
+    return {
+        id: `gcs_${timestamp}`,
+        name: musicFile.originalname,
+        title: metadata.title || musicFile.originalname.replace(/\.[^/.]+$/, ''),
+        size: musicFile.size,
+        mimeType: musicFile.mimetype,
+        createdTime: new Date().toISOString(),
+        uploadDate: metadata.uploadDate || new Date().toISOString(),
+        streamUrl: null, // We'll generate this on-demand
+        gcsFileName: musicFileName,
+        coverUrl: null, // We'll generate this on-demand
+        gcsCoverFileName: coverFileName,
+        storageType: 'gcs'
+    };
+}
+
+async function uploadToLocal(musicFile, coverFile, metadata) {
+    console.log('💾 Storing locally (demo mode)...');
+    
+    // This is just a simulation - in production you'd save to disk
+    return {
+        id: `local_${Date.now()}`,
+        name: musicFile.originalname,
+        title: metadata.title || musicFile.originalname.replace(/\.[^/.]+$/, ''),
+        size: musicFile.size,
+        mimeType: musicFile.mimetype,
+        createdTime: new Date().toISOString(),
+        uploadDate: metadata.uploadDate || new Date().toISOString(),
+        streamUrl: 'https://www.soundjay.com/misc/sounds/bell-ringing-05.wav',
+        coverUrl: coverFile ? 'https://via.placeholder.com/500x500/000000/FFFFFF?text=DEMO' : null,
+        storageType: 'local',
+        note: 'Demo mode - file not actually stored'
+    };
+}
+
+// Generate signed URLs for Google Cloud Storage files
+async function generateSignedUrl(fileName, expirationHours = 24) {
+    try {
+        const bucket = gcsStorage.bucket(process.env.GCS_BUCKET_NAME);
+        const file = bucket.file(fileName);
+        
+        const [url] = await file.getSignedUrl({
+            version: 'v4',
+            action: 'read',
+            expires: Date.now() + (expirationHours * 60 * 60 * 1000), // expires in specified hours
+        });
+        
+        return url;
+    } catch (error) {
+        console.error('Error generating signed URL:', error);
+        return null;
+    }
+}
+
+// Updated upload endpoint
 app.post('/api/upload', requireAdmin, upload.fields([
     { name: 'musicFile', maxCount: 1 },
     { name: 'coverImage', maxCount: 1 }
 ]), async (req, res) => {
     console.log('📤 File upload attempt');
     console.log('📊 Request size:', req.get('Content-Length') || 'Unknown');
-    console.log('📊 Content type:', req.get('Content-Type') || 'Unknown');
+    console.log('🗄️  Storage mode:', storageMode);
     
     try {
         if (!req.files || !req.files.musicFile) {
@@ -255,200 +463,191 @@ app.post('/api/upload', requireAdmin, upload.fields([
             console.log(`Cover image: ${coverFile.originalname} (${coverFile.size} bytes)`);
         }
 
-        if (isCloudinaryConfigured && cloudinary) {
-            console.log('☁️  Uploading to Cloudinary...');
-            
-            // Validate file types before upload
-            if (!musicFile.mimetype.startsWith('audio/')) {
-                return res.status(400).json({ error: 'Music file must be an audio format' });
-            }
-            if (coverFile && !coverFile.mimetype.startsWith('image/')) {
-                return res.status(400).json({ error: 'Cover file must be an image format' });
-            }
+        const metadata = {
+            title: req.body.title,
+            uploadDate: req.body.uploadDate
+        };
 
-            // Upload music file to Cloudinary
-            const musicResult = await new Promise((resolve, reject) => {
-                cloudinary.uploader.upload_stream(
-                    {
-                        resource_type: 'video', // Use 'video' for audio files in Cloudinary
-                        folder: 'made-infinite-music',
-                        public_id: `music_${Date.now()}_${musicFile.originalname.replace(/\.[^/.]+$/, "")}`,
-                        format: 'mp3',
-                        transformation: [
-                            { quality: 'auto:good' }
-                        ]
-                    },
-                    (error, result) => {
-                        if (error) {
-                            console.error('Cloudinary music upload error:', error);
-                            // Handle specific Cloudinary errors
-                            if (error.message && error.message.includes('too large to process synchronously')) {
-                                reject(new Error('File too large. Please use a smaller audio file (under 200MB).'));
-                            } else {
-                                reject(new Error(`Upload failed: ${error.message || error}`));
-                            }
-                        } else {
-                            console.log('✅ Music upload successful');
-                            resolve(result);
-                        }
-                    }
-                ).end(musicFile.buffer);
-            });
-
-            // Upload cover image if provided
-            let coverResult = null;
-            if (coverFile) {
-                try {
-                    coverResult = await new Promise((resolve, reject) => {
-                        cloudinary.uploader.upload_stream(
-                            {
-                                resource_type: 'image',
-                                folder: 'made-infinite-covers',
-                                public_id: `cover_${Date.now()}_${coverFile.originalname.replace(/\.[^/.]+$/, "")}`,
-                                transformation: [
-                                    { width: 500, height: 500, crop: 'fill', quality: 'auto:good' }
-                                ]
-                            },
-                            (error, result) => {
-                                if (error) {
-                                    console.error('Cloudinary cover upload error:', error);
-                                    reject(error);
-                                } else {
-                                    console.log('✅ Cover upload successful');
-                                    resolve(result);
-                                }
-                            }
-                        ).end(coverFile.buffer);
-                    });
-                } catch (coverError) {
-                    console.error('❌ Cover upload failed, continuing without cover:', coverError);
+        let fileData;
+        
+        // Route to appropriate storage backend
+        switch (storageMode) {
+            case STORAGE_MODES.GCS:
+                if (!isGCSConfigured) {
+                    throw new Error('Google Cloud Storage not configured');
                 }
-            }
-
-            // Store file metadata
-            const fileData = {
-                id: musicResult.public_id,
-                name: musicFile.originalname,
-                title: req.body.title || musicFile.originalname.replace(/\.[^/.]+$/, ''),
-                size: musicFile.size,
-                mimeType: 'audio/mpeg',
-                createdTime: new Date().toISOString(),
-                uploadDate: req.body.uploadDate || new Date().toISOString(),
-                streamUrl: musicResult.secure_url,
-                cloudinaryId: musicResult.public_id,
-                coverUrl: coverResult ? coverResult.secure_url : null,
-                coverCloudinaryId: coverResult ? coverResult.public_id : null
-            };
-
-            console.log(`📁 Before push: ${musicFiles.length} files`);
-            musicFiles.push(fileData);
-            console.log(`📁 After push: ${musicFiles.length} files`);
-            console.log(`📁 All file IDs: ${musicFiles.map(f => f.id).join(', ')}`);
-            
-            // Save to persistent storage
-            saveMusicFiles();
-            
-            res.json({ success: true, file: fileData });
-            
-        } else {
-            console.log('💾 Cloudinary not configured - simulating upload...');
-            
-            // Simulate upload without actually storing the file
-            const fileData = {
-                id: `local_${Date.now()}`,
-                name: musicFile.originalname,
-                title: req.body.title || musicFile.originalname.replace(/\.[^/.]+$/, ''),
-                size: musicFile.size,
-                mimeType: musicFile.mimetype,
-                createdTime: new Date().toISOString(),
-                uploadDate: req.body.uploadDate || new Date().toISOString(),
-                streamUrl: 'https://www.soundjay.com/misc/sounds/bell-ringing-05.wav', // Demo URL
-                coverUrl: coverFile ? 'https://via.placeholder.com/500x500/000000/FFFFFF?text=DEMO' : null,
-                note: 'Demo mode - file not actually stored'
-            };
-
-            console.log(`📁 Before push (demo): ${musicFiles.length} files`);
-            musicFiles.push(fileData);
-            console.log(`📁 After push (demo): ${musicFiles.length} files`);
-            console.log(`📁 All file IDs (demo): ${musicFiles.map(f => f.id).join(', ')}`);
-            
-            // Save to persistent storage
-            saveMusicFiles();
-            
-            res.json({ 
-                success: true, 
-                file: fileData,
-                warning: 'Demo mode: File uploaded but not stored. Configure Cloudinary for real uploads.'
-            });
+                fileData = await uploadToGCS(musicFile, coverFile, metadata);
+                break;
+                
+            case STORAGE_MODES.CLOUDINARY:
+                if (!isCloudinaryConfigured) {
+                    throw new Error('Cloudinary not configured');
+                }
+                fileData = await uploadToCloudinary(musicFile, coverFile, metadata);
+                break;
+                
+            case STORAGE_MODES.LOCAL:
+            default:
+                fileData = await uploadToLocal(musicFile, coverFile, metadata);
+                break;
         }
 
+        console.log(`📁 Before push: ${musicFiles.length} files`);
+        musicFiles.push(fileData);
+        console.log(`📁 After push: ${musicFiles.length} files`);
+        
+        // Save to persistent storage
+        saveMusicFiles();
+        
+        res.json({ 
+            success: true, 
+            file: fileData,
+            storageMode: storageMode,
+            warning: storageMode === STORAGE_MODES.LOCAL ? 'Demo mode: File uploaded but not stored. Configure GCS or Cloudinary for real uploads.' : null
+        });
+        
     } catch (error) {
         console.error('❌ Upload error:', error);
-        res.status(500).json({ error: 'Upload failed: ' + error.message });
+        
+        // Handle specific GCS errors
+        if (error.message && error.message.includes('does not exist')) {
+            return res.status(500).json({ 
+                error: 'Google Cloud Storage bucket not found. Please check your GCS_BUCKET_NAME configuration.',
+                code: 'GCS_BUCKET_NOT_FOUND'
+            });
+        }
+        
+        if (error.message && error.message.includes('authentication')) {
+            return res.status(500).json({ 
+                error: 'Google Cloud Storage authentication failed. Please check your credentials.',
+                code: 'GCS_AUTH_FAILED'
+            });
+        }
+        
+        res.status(500).json({ 
+            error: 'Upload failed: ' + error.message,
+            storageMode: storageMode
+        });
     }
 });
 
-// Get all music files
-app.get('/api/files', (req, res) => {
-    console.log(`📚 Returning ${musicFiles.length} music files`);
-    res.json({ 
-        files: musicFiles,
-        cloudinaryConfigured: isCloudinaryConfigured,
-        demoMode: !isCloudinaryConfigured
-    });
-});
-
-// Delete music file
+// Updated delete endpoint
 app.delete('/api/files/:fileId', requireAdmin, async (req, res) => {
     console.log('🗑️  Delete file attempt');
     
     try {
-        // Decode the file ID properly (it may be URL encoded)
         const fileId = decodeURIComponent(req.params.fileId);
         console.log(`Deleting file ID: ${fileId}`);
         
-        // Find the file
         const fileIndex = musicFiles.findIndex(file => file.id === fileId);
         
         if (fileIndex === -1) {
-            console.log(`❌ File not found. Available IDs: ${musicFiles.map(f => f.id).join(', ')}`);
             return res.status(404).json({ error: 'File not found' });
         }
         
         const file = musicFiles[fileIndex];
-        console.log(`Found file: ${file.name} (cloudinaryId: ${file.cloudinaryId})`);
+        console.log(`Found file: ${file.name} (storage: ${file.storageType})`);
         
-        // Delete from Cloudinary if configured
-        if (isCloudinaryConfigured && cloudinary && file.cloudinaryId) {
+        // Delete from appropriate storage backend
+        if (file.storageType === 'gcs' && isGCSConfigured) {
+            console.log('🌩️  Deleting from Google Cloud Storage...');
+            try {
+                const bucket = gcsStorage.bucket(process.env.GCS_BUCKET_NAME);
+                
+                // Delete music file
+                if (file.gcsFileName) {
+                    await bucket.file(file.gcsFileName).delete();
+                    console.log('✅ Music file deleted from GCS');
+                }
+                
+                // Delete cover file if it exists
+                if (file.gcsCoverFileName) {
+                    await bucket.file(file.gcsCoverFileName).delete();
+                    console.log('✅ Cover file deleted from GCS');
+                }
+            } catch (gcsError) {
+                console.error('❌ GCS deletion failed:', gcsError);
+                // Continue with local deletion even if GCS deletion fails
+            }
+        } else if (file.storageType === 'cloudinary' && isCloudinaryConfigured) {
             console.log('☁️  Deleting from Cloudinary...');
             try {
-                // Delete music file
-                await cloudinary.uploader.destroy(file.cloudinaryId, { resource_type: 'auto' });
-                console.log('✅ Music file deleted from Cloudinary');
+                if (file.cloudinaryId) {
+                    await cloudinary.uploader.destroy(file.cloudinaryId, { resource_type: 'auto' });
+                    console.log('✅ Music file deleted from Cloudinary');
+                }
                 
-                // Delete cover image if it exists
                 if (file.coverCloudinaryId) {
                     await cloudinary.uploader.destroy(file.coverCloudinaryId, { resource_type: 'image' });
                     console.log('✅ Cover image deleted from Cloudinary');
                 }
             } catch (cloudinaryError) {
                 console.error('❌ Cloudinary deletion failed:', cloudinaryError);
-                // Continue anyway - remove from our list even if Cloudinary fails
             }
         }
         
-        // Remove from local storage
+        // Remove from local array
         musicFiles.splice(fileIndex, 1);
-        console.log('✅ File deleted successfully from local storage');
-
+        console.log(`📁 After deletion: ${musicFiles.length} files remaining`);
+        
         // Save to persistent storage
         saveMusicFiles();
-
+        
         res.json({ success: true, message: 'File deleted successfully' });
-
+        
     } catch (error) {
         console.error('❌ Delete error:', error);
         res.status(500).json({ error: 'Delete failed: ' + error.message });
+    }
+});
+
+// Updated files endpoint with signed URLs for GCS
+app.get('/api/files', async (req, res) => {
+    console.log(`📚 Returning ${musicFiles.length} music files`);
+    
+    // For GCS files, generate signed URLs
+    const filesWithUrls = await Promise.all(musicFiles.map(async (file) => {
+        if (file.storageType === 'gcs' && isGCSConfigured) {
+            const streamUrl = file.gcsFileName ? await generateSignedUrl(file.gcsFileName, 24) : null;
+            const coverUrl = file.gcsCoverFileName ? await generateSignedUrl(file.gcsCoverFileName, 24) : null;
+            
+            return {
+                ...file,
+                streamUrl,
+                coverUrl
+            };
+        }
+        return file;
+    }));
+    
+    res.json({ 
+        files: filesWithUrls,
+        storageMode: storageMode,
+        gcsConfigured: isGCSConfigured,
+        cloudinaryConfigured: isCloudinaryConfigured,
+        demoMode: storageMode === STORAGE_MODES.LOCAL
+    });
+});
+
+// Add endpoint to refresh signed URLs (for long-playing sessions)
+app.get('/api/files/:fileId/url', async (req, res) => {
+    try {
+        const fileId = decodeURIComponent(req.params.fileId);
+        const file = musicFiles.find(f => f.id === fileId);
+        
+        if (!file) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+        
+        if (file.storageType === 'gcs' && isGCSConfigured && file.gcsFileName) {
+            const signedUrl = await generateSignedUrl(file.gcsFileName, 24);
+            res.json({ streamUrl: signedUrl });
+        } else {
+            res.json({ streamUrl: file.streamUrl });
+        }
+    } catch (error) {
+        console.error('Error refreshing URL:', error);
+        res.status(500).json({ error: 'Failed to refresh URL' });
     }
 });
 
@@ -461,10 +660,12 @@ app.get('/', (req, res) => {
 app.get('/api/health', (req, res) => {
     res.json({ 
         status: 'OK',
-        mode: isCloudinaryConfigured ? 'Production (Cloudinary)' : 'Demo Mode',
+        mode: storageMode === STORAGE_MODES.GCS ? 'Production (Google Cloud Storage)' :
+              storageMode === STORAGE_MODES.CLOUDINARY ? 'Production (Cloudinary)' : 'Demo Mode',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
         filesCount: musicFiles.length,
+        gcsConfigured: isGCSConfigured,
         cloudinaryConfigured: isCloudinaryConfigured,
         adminPassword: process.env.ADMIN_PASSWORD || 'admin123'
     });
@@ -507,24 +708,18 @@ app.use('*', (req, res) => {
 });
 
 const server = app.listen(PORT, () => {
-    console.log(`🎵 MADE INFINITE server running on port ${PORT}`);
-    console.log(`🕐 Server started at: ${new Date().toISOString()}`);
-    console.log(`📁 Initial files count: ${musicFiles.length}`);
-    console.log(`🌐 Frontend: http://localhost:${PORT}`);
-    console.log(`🔧 API: http://localhost:${PORT}/api`);
-    console.log(`📊 Health: http://localhost:${PORT}/api/health`);
-    console.log(`🔑 Admin password: ${process.env.ADMIN_PASSWORD || 'admin123'}`);
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🗄️  Storage mode: ${storageMode.toUpperCase()}`);
+    console.log(`📁 Loaded ${musicFiles.length} music files`);
     
-    if (isCloudinaryConfigured) {
-        console.log(`☁️  Cloudinary mode: Unlimited storage enabled`);
-        console.log(`🔧 Note: Files stored in memory - will reset on server restart`);
-        console.log(`💡 Consider adding persistent database for production use`);
+    if (storageMode === STORAGE_MODES.GCS && isGCSConfigured) {
+        console.log(`🌩️  Google Cloud Storage ready with bucket: ${process.env.GCS_BUCKET_NAME}`);
+        console.log(`📊 File size limit: 500MB`);
+    } else if (storageMode === STORAGE_MODES.CLOUDINARY && isCloudinaryConfigured) {
+        console.log(`☁️  Cloudinary ready`);
+        console.log(`📊 File size limit: 200MB`);
     } else {
-        console.log(`💾 Demo mode: Files simulated (configure Cloudinary for real uploads)`);
-        console.log(`🔧 To enable Cloudinary:`);
-        console.log(`   1. Sign up at https://cloudinary.com`);
-        console.log(`   2. Get your credentials from the dashboard`);
-        console.log(`   3. Update your .env file with real credentials`);
+        console.log(`💾 Demo mode - configure GCS or Cloudinary for real uploads`);
     }
 });
 
