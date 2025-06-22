@@ -52,11 +52,18 @@ try {
     
     if (process.env.GOOGLE_CLOUD_KEYFILE) {
         gcsConfig.keyFilename = process.env.GOOGLE_CLOUD_KEYFILE;
+        console.log('🔑 Using keyfile:', process.env.GOOGLE_CLOUD_KEYFILE);
     } else if (process.env.GOOGLE_CLOUD_CREDENTIALS) {
         // For Railway/Heroku deployment
-        const credentials = JSON.parse(process.env.GOOGLE_CLOUD_CREDENTIALS);
-        gcsConfig.credentials = credentials;
-        gcsConfig.projectId = credentials.project_id;
+        try {
+            const credentials = JSON.parse(process.env.GOOGLE_CLOUD_CREDENTIALS);
+            gcsConfig.credentials = credentials;
+            gcsConfig.projectId = credentials.project_id;
+            console.log('🔑 Using credentials from environment variable');
+        } catch (parseError) {
+            console.error('❌ Failed to parse GOOGLE_CLOUD_CREDENTIALS:', parseError.message);
+            throw parseError;
+        }
     }
     
     if (process.env.GOOGLE_CLOUD_PROJECT_ID) {
@@ -68,11 +75,29 @@ try {
         isGCSConfigured = true;
         console.log('🌩️  Google Cloud Storage configured successfully');
         console.log(`📦 Using bucket: ${process.env.GCS_BUCKET_NAME}`);
+        
+        // Test the connection asynchronously
+        setTimeout(async () => {
+            try {
+                const bucket = gcsStorage.bucket(process.env.GCS_BUCKET_NAME);
+                const [exists] = await bucket.exists();
+                if (exists) {
+                    console.log('✅ Bucket exists and is accessible');
+                } else {
+                    console.log('⚠️  Bucket does not exist or is not accessible');
+                }
+            } catch (testError) {
+                console.error('❌ Bucket test failed:', testError.message);
+            }
+        }, 1000);
     } else {
-        console.log('⚠️  Google Cloud Storage not configured');
+        console.log('⚠️  Google Cloud Storage not configured - missing config or bucket name');
+        console.log('📝 Config keys:', Object.keys(gcsConfig));
+        console.log('📝 Bucket name:', process.env.GCS_BUCKET_NAME);
     }
 } catch (error) {
     console.log('⚠️  Google Cloud Storage not available:', error.message);
+    console.log('🔍 Full error:', error);
 }
 
 // Determine storage mode
@@ -343,64 +368,97 @@ async function uploadToCloudinary(musicFile, coverFile, metadata) {
 async function uploadToGCS(musicFile, coverFile, metadata) {
     console.log('🌩️  Uploading to Google Cloud Storage...');
     
-    const bucket = gcsStorage.bucket(process.env.GCS_BUCKET_NAME);
-    const timestamp = Date.now();
-    
-    // Upload music file
-    const musicFileName = `music/${timestamp}_${musicFile.originalname}`;
-    const musicFileRef = bucket.file(musicFileName);
-    
-    await musicFileRef.save(musicFile.buffer, {
-        metadata: {
-            contentType: musicFile.mimetype,
+    try {
+        const bucket = gcsStorage.bucket(process.env.GCS_BUCKET_NAME);
+        const timestamp = Date.now();
+        
+        // Upload music file
+        const musicFileName = `music/${timestamp}_${musicFile.originalname}`;
+        const musicFileRef = bucket.file(musicFileName);
+        
+        console.log(`📤 Uploading music file: ${musicFileName} (${musicFile.size} bytes)`);
+        await musicFileRef.save(musicFile.buffer, {
             metadata: {
-                originalName: musicFile.originalname,
-                uploadDate: metadata.uploadDate || new Date().toISOString(),
-                title: metadata.title || musicFile.originalname.replace(/\.[^/.]+$/, '')
+                contentType: musicFile.mimetype,
+                metadata: {
+                    originalName: musicFile.originalname,
+                    uploadDate: metadata.uploadDate || new Date().toISOString(),
+                    title: metadata.title || musicFile.originalname.replace(/\.[^/.]+$/, '')
+                }
+            }
+        });
+        
+        // DON'T make public - we'll use signed URLs instead
+        console.log('✅ Music uploaded to GCS (private)');
+        
+        // Upload cover file if provided
+        let coverFileName = null;
+        if (coverFile) {
+            try {
+                coverFileName = `covers/${timestamp}_${coverFile.originalname}`;
+                const coverFileRef = bucket.file(coverFileName);
+                
+                console.log(`📤 Uploading cover file: ${coverFileName} (${coverFile.size} bytes)`);
+                await coverFileRef.save(coverFile.buffer, {
+                    metadata: {
+                        contentType: coverFile.mimetype,
+                        metadata: {
+                            originalName: coverFile.originalname,
+                            uploadDate: new Date().toISOString()
+                        }
+                    }
+                });
+                
+                console.log('✅ Cover uploaded to GCS (private)');
+            } catch (error) {
+                console.error('❌ Cover upload failed:', error.message);
+                console.error('🔍 Full cover error:', error);
             }
         }
-    });
-    
-    // DON'T make public - we'll use signed URLs instead
-    console.log('✅ Music uploaded to GCS (private)');
-    
-    // Upload cover file if provided
-    let coverFileName = null;
-    if (coverFile) {
-        try {
-            coverFileName = `covers/${timestamp}_${coverFile.originalname}`;
-            const coverFileRef = bucket.file(coverFileName);
-            
-            await coverFileRef.save(coverFile.buffer, {
-                metadata: {
-                    contentType: coverFile.mimetype,
-                    metadata: {
-                        originalName: coverFile.originalname,
-                        uploadDate: new Date().toISOString()
-                    }
-                }
-            });
-            
-            console.log('✅ Cover uploaded to GCS (private)');
-        } catch (error) {
-            console.error('Cover upload failed:', error);
+        
+        return {
+            id: `gcs_${timestamp}`,
+            name: musicFile.originalname,
+            title: metadata.title || musicFile.originalname.replace(/\.[^/.]+$/, ''),
+            size: musicFile.size,
+            mimeType: musicFile.mimetype,
+            createdTime: new Date().toISOString(),
+            uploadDate: metadata.uploadDate || new Date().toISOString(),
+            streamUrl: null, // We'll generate this on-demand
+            gcsFileName: musicFileName,
+            coverUrl: null, // We'll generate this on-demand
+            gcsCoverFileName: coverFileName,
+            storageType: 'gcs'
+        };
+    } catch (error) {
+        console.error('❌ GCS Upload Error:', error.message);
+        console.error('🔍 Full error:', error);
+        console.error('🔍 Error code:', error.code);
+        console.error('🔍 Error details:', error.details);
+        
+        // Check for specific error types
+        if (error.message.includes('ENOENT') || error.message.includes('no such file')) {
+            throw new Error('Service account key file not found. Check GOOGLE_CLOUD_KEYFILE path.');
         }
+        
+        if (error.message.includes('DECODER routines::unsupported') || error.message.includes('private key')) {
+            throw new Error('Invalid private key format in service account credentials. Please re-download the JSON file from Google Cloud Console.');
+        }
+        
+        if (error.message.includes('authentication') || error.code === 401) {
+            throw new Error('Google Cloud authentication failed. Check your service account credentials.');
+        }
+        
+        if (error.message.includes('permission') || error.code === 403) {
+            throw new Error('Google Cloud permission denied. Check your service account has Storage Admin role.');
+        }
+        
+        if (error.message.includes('not found') || error.code === 404) {
+            throw new Error(`Google Cloud bucket '${process.env.GCS_BUCKET_NAME}' not found. Check your GCS_BUCKET_NAME.`);
+        }
+        
+        throw new Error(`Google Cloud Storage upload failed: ${error.message}`);
     }
-    
-    return {
-        id: `gcs_${timestamp}`,
-        name: musicFile.originalname,
-        title: metadata.title || musicFile.originalname.replace(/\.[^/.]+$/, ''),
-        size: musicFile.size,
-        mimeType: musicFile.mimetype,
-        createdTime: new Date().toISOString(),
-        uploadDate: metadata.uploadDate || new Date().toISOString(),
-        streamUrl: null, // We'll generate this on-demand
-        gcsFileName: musicFileName,
-        coverUrl: null, // We'll generate this on-demand
-        gcsCoverFileName: coverFileName,
-        storageType: 'gcs'
-    };
 }
 
 async function uploadToLocal(musicFile, coverFile, metadata) {
