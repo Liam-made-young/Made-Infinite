@@ -61,8 +61,8 @@ app.use(cors({
     credentials: true
 }));
 
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '200mb' }));
+app.use(express.urlencoded({ extended: true, limit: '200mb' }));
 
 // Rate limiting
 const limiter = rateLimit({
@@ -101,7 +101,7 @@ app.use(express_static);
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: {
-        fileSize: 100 * 1024 * 1024, // 100MB limit
+        fileSize: 200 * 1024 * 1024, // 200MB limit
     },
     fileFilter: (req, file, cb) => {
         if (file.mimetype.startsWith('audio/') || file.mimetype.startsWith('image/')) {
@@ -265,7 +265,7 @@ app.post('/api/upload', requireAdmin, upload.fields([
                             console.error('Cloudinary music upload error:', error);
                             // Handle specific Cloudinary errors
                             if (error.message && error.message.includes('too large to process synchronously')) {
-                                reject(new Error('File too large. Please use a smaller audio file (under 50MB).'));
+                                reject(new Error('File too large. Please use a smaller audio file (under 200MB).'));
                             } else {
                                 reject(new Error(`Upload failed: ${error.message || error}`));
                             }
@@ -458,7 +458,7 @@ app.use((error, req, res, next) => {
     
     if (error instanceof multer.MulterError) {
         if (error.code === 'LIMIT_FILE_SIZE') {
-            return res.status(400).json({ error: 'File too large (max 100MB)' });
+            return res.status(400).json({ error: 'File too large (max 200MB)' });
         }
     }
     

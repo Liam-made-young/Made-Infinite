@@ -275,9 +275,9 @@ function handleAudioFileSelection(event) {
                 continue;
             }
             
-            // Check file size (50MB limit)
-            if (file.size > 50 * 1024 * 1024) {
-                showStatus(`${file.name} is too large (max 50MB)`, 'error');
+            // Check file size (200MB limit)
+            if (file.size > 200 * 1024 * 1024) {
+                showStatus(`${file.name} is too large (max 200MB)`, 'error');
                 continue;
             }
             
@@ -389,8 +389,8 @@ async function uploadFiles() {
             isUploading = false;
             return;
         }
-        if (file.size > 50 * 1024 * 1024) {
-            showStatus(`${file.name} is too large (max 50MB) - skipping`, 'error');
+        if (file.size > 200 * 1024 * 1024) {
+            showStatus(`${file.name} is too large (max 200MB) - skipping`, 'error');
             isUploading = false;
             return;
         }

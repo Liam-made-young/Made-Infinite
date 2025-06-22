@@ -148,3 +148,6 @@ node_modules/
 
 # Music files storage
 musicFiles.json
+
+# Documentation (keep in repo)
+# STORAGE_LIMITS.md
