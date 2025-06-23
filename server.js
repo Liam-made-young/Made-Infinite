@@ -114,6 +114,9 @@ console.log(`🗄️  Storage mode: ${storageMode.toUpperCase()}`);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Trust proxy for Railway/Heroku deployment
+app.set('trust proxy', 1);
+
 // Security middleware (permissive for development)
 app.use(helmet({
     contentSecurityPolicy: {
@@ -160,13 +163,13 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 
 
-// Update your session configuration (around line 71-80)
+// Session configuration
 app.use(session({
     secret: process.env.SESSION_SECRET || 'Yourawaveydude4145!!!!',
     resave: false,
     saveUninitialized: false,
     cookie: {
-        secure: false, // Set to false for now to test
+        secure: process.env.NODE_ENV === 'production', // Use secure cookies in production
         httpOnly: true,
         maxAge: 24 * 60 * 60 * 1000 // 24 hours
     }
