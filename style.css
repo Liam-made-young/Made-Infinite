@@ -502,6 +502,8 @@ input[type="password"]:focus {
     padding: 40px;
     width: 500px;
     max-width: 90vw;
+    max-height: 90vh;
+    overflow-y: auto;
     text-align: center;
     position: relative;
 }
@@ -650,36 +652,94 @@ input[type="password"]:focus {
     transition: all 0.2s ease;
 }
 
-/* Volume Section */
-.volume-section {
-    display: flex;
-    align-items: center;
-    gap: 15px;
-    margin: 25px 0;
-    padding: 0 10px;
-}
-
-.volume-btn {
+/* Integrated Volume & Stem Controls */
+.volume-stem-section {
+    margin: 20px 0;
+    padding: 15px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border);
-    color: var(--text-primary);
-    padding: 10px 14px;
-    font-size: 1.1rem;
+}
+
+.volume-mixer {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 20px;
+    padding: 10px;
+    height: 100px;
+}
+
+.volume-control {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    min-width: 30px;
+}
+
+.volume-label {
+    font-size: 0.75rem;
+    font-weight: bold;
+    color: var(--text-secondary);
+    text-align: center;
+    margin-bottom: 5px;
+}
+
+.master-volume .volume-label {
+    color: var(--accent);
+}
+
+.volume-slider-vertical {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 80px;
+    height: 4px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    outline: none;
+    cursor: pointer;
+    border-radius: 2px;
+    transform: rotate(-90deg);
+    transform-origin: center;
+}
+
+.volume-slider-vertical::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    background: var(--accent);
+    border: 2px solid var(--bg-secondary);
+    border-radius: 50%;
     cursor: pointer;
     transition: all 0.2s ease;
-    min-width: 45px;
+}
+
+.volume-slider-vertical::-webkit-slider-thumb:hover {
+    background: var(--text-primary);
+    transform: scale(1.1);
+}
+
+.volume-slider-vertical::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    background: var(--accent);
+    border: 2px solid var(--bg-secondary);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    -moz-appearance: none;
+}
+
+.volume-slider-vertical::-moz-range-track {
+    width: 80px;
+    height: 4px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
     border-radius: 2px;
 }
 
-.volume-btn:hover {
-    background: var(--hover);
-    transform: scale(1.05);
-}
-
-.volume-container {
-    flex: 1;
-    max-width: 200px;
-}
+/* Removed volume-btn-compact styles since download buttons are removed */
 
 /* Public Library - Single Viewport Layout */
 .library-section {
@@ -792,6 +852,68 @@ input[type="password"]:focus {
     background: var(--hover);
 }
 
+/* Stem Status Bubbles */
+.stem-status-bubble {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    margin-left: 8px;
+    margin-right: 4px;
+    vertical-align: middle;
+    box-shadow: 0 0 4px rgba(0,0,0,0.3);
+    transition: all 0.3s ease;
+}
+
+.stem-status-red {
+    background: linear-gradient(135deg, #ff4757, #ff3742);
+    box-shadow: 0 0 8px rgba(255, 71, 87, 0.4);
+}
+
+.stem-status-yellow {
+    background: linear-gradient(135deg, #ffa502, #ff9500);
+    box-shadow: 0 0 8px rgba(255, 165, 2, 0.4);
+    animation: pulse-yellow 2s infinite;
+}
+
+.stem-status-green {
+    background: linear-gradient(135deg, #2ed573, #1dd1a1);
+    box-shadow: 0 0 8px rgba(46, 213, 115, 0.4);
+}
+
+@keyframes pulse-yellow {
+    0%, 100% { 
+        opacity: 1; 
+        transform: scale(1);
+    }
+    50% { 
+        opacity: 0.7; 
+        transform: scale(1.1);
+    }
+}
+
+/* Status bubble in music player header */
+.music-player h2 .stem-status-bubble {
+    width: 14px;
+    height: 14px;
+    margin-left: 10px;
+}
+
+/* Status bubble in library items */
+.music-item .stem-status-bubble,
+.admin-file-item .stem-status-bubble {
+    width: 10px;
+    height: 10px;
+    margin-left: 6px;
+    margin-right: 2px;
+}
+
+/* Hover effects */
+.stem-status-bubble:hover {
+    transform: scale(1.2);
+    cursor: help;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
     .title {
@@ -867,4 +989,37 @@ input[type="password"]:focus {
     .card-actions {
         flex-direction: column;
     }
-}           
+}
+
+/* Mobile Responsive Volume Controls */
+@media (max-width: 768px) {
+    .volume-mixer {
+        gap: 15px;
+        height: 120px;
+    }
+    
+    .volume-slider-vertical {
+        width: 80px;
+        height: 4px;
+    }
+    
+    .volume-label {
+        font-size: 0.7rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .volume-mixer {
+        gap: 12px;
+        height: 100px;
+    }
+    
+    .volume-slider-vertical {
+        width: 70px;
+        height: 4px;
+    }
+    
+    .volume-control {
+        min-width: 30px;
+    }
+}

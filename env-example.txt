@@ -14,18 +14,27 @@ GOOGLE_CLOUD_PROJECT_ID=your-project-id
 GOOGLE_CLOUD_KEYFILE=path/to/service-account-key.json
 # OR use GOOGLE_CLOUD_CREDENTIALS for Railway/Heroku deployment
 GOOGLE_CLOUD_CREDENTIALS={"type":"service_account","project_id":"..."}
-GCS_BUCKET_NAME=made-infinite-music-bucket
+GCS_BUCKET_NAME=your-bucket-name
 
-# Cloudinary Configuration (if using cloudinary mode)
+# Cloudinary Configuration (alternative to GCS)
 CLOUDINARY_CLOUD_NAME=your-cloud-name
 CLOUDINARY_API_KEY=your-api-key
 CLOUDINARY_API_SECRET=your-api-secret
 
 # Session Secret
-SESSION_SECRET=your-super-secret-session-key
+SESSION_SECRET=your-super-secret-session-key-here
 
-# Hosting Configuration (for production)
+# Hosting URL (for production)
 HOSTING_URL=https://your-app.railway.app
+
+# Stem Processing Configuration
+ENABLE_STEM_PROCESSING=true
+PYTHON_PATH=python3
+SPLEETER_ENV_PATH=./spleeter-env/bin/activate
+
+# Optional: Processing Configuration
+STEM_PROCESSING_TIMEOUT=300000  # 5 minutes in milliseconds
+MAX_CONCURRENT_PROCESSING=1     # Process one song at a time
 
 # Google Drive API Configuration
 GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com

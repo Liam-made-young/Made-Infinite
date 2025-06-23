@@ -100,7 +100,33 @@
                 <!-- Hidden Audio Element (no controls) -->
                 <audio id="musicPlayer" preload="metadata"></audio>
                 
-                <!-- Custom Progress Controls -->
+                                <!-- Integrated Volume & Stem Controls (moved up) -->
+                <div class="volume-stem-section">
+                    <div class="volume-mixer">
+                        <!-- Stem Volume Controls -->
+                        <div class="volume-control stem-volume" data-stem="vocals">
+                            <div class="volume-label">V</div>
+                            <input type="range" class="volume-slider-vertical" min="0" max="100" value="100" oninput="setStemVolume('vocals', this.value)">
+                        </div>
+                        
+                        <div class="volume-control stem-volume" data-stem="drums">
+                            <div class="volume-label">D</div>
+                            <input type="range" class="volume-slider-vertical" min="0" max="100" value="100" oninput="setStemVolume('drums', this.value)">
+                        </div>
+                        
+                        <div class="volume-control stem-volume" data-stem="bass">
+                            <div class="volume-label">B</div>
+                            <input type="range" class="volume-slider-vertical" min="0" max="100" value="100" oninput="setStemVolume('bass', this.value)">
+                        </div>
+                        
+                        <div class="volume-control stem-volume" data-stem="other">
+                            <div class="volume-label">O</div>
+                            <input type="range" class="volume-slider-vertical" min="0" max="100" value="100" oninput="setStemVolume('other', this.value)">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Custom Progress Controls (moved down) -->
                 <div class="progress-section">
                     <div class="time-display">
                         <span id="currentTime">0:00</span>
@@ -114,22 +140,11 @@
                     </div>
                 </div>
                 
-                <!-- Custom Playback Controls -->
+                <!-- Custom Playback Controls (moved down) -->
                 <div class="player-controls">
                     <button id="prevBtn" class="ctrl-btn">⏮</button>
                     <button id="playPauseBtn" class="ctrl-btn main-play">▶</button>
                     <button id="nextBtn" class="ctrl-btn">⏭</button>
-                </div>
-                
-                <!-- Volume Controls -->
-                <div class="volume-section">
-                    <button id="muteBtn" class="volume-btn">🔊</button>
-                    <div class="volume-container">
-                        <input type="range" id="volumeSlider" class="volume-slider" min="0" max="100" value="100">
-                        <div class="volume-track">
-                            <div id="volumeFill" class="volume-fill"></div>
-                        </div>
-                    </div>
                 </div>
                 
                 <div id="currentTrackName" class="track-info">•••</div>

@@ -6,6 +6,11 @@ let isAdminLoggedIn = false;
 let musicFiles = [];
 let selectedCoverFile = null;
 
+// Stem Control Variables
+let stemPlayers = {};
+let currentStemFile = null;
+let stemProcessingInProgress = false;
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     console.log('✅ DOM loaded');
@@ -117,12 +122,7 @@ function setupEventListeners() {
         console.log('✅ Next button listener added');
     }
     
-    // Volume controls
-    const muteBtn = document.getElementById('muteBtn');
-    if (muteBtn) {
-        muteBtn.addEventListener('click', toggleMute);
-        console.log('✅ Mute button listener added');
-    }
+    // Volume controls removed - using individual stem controls only
     
     // Keyboard controls
     setupKeyboardControls();
@@ -542,6 +542,18 @@ function refreshAdminLibrary() {
         const formattedDate = uploadDate ? formatUploadDate(uploadDate) : 'Unknown date';
         const displayName = file.title || file.name;
         
+        // Determine stem status for this file
+        let stemStatusClass = 'stem-status-red';
+        let stemTooltip = 'No stems yet. Play this track to start stem processing.';
+        
+        if (file.stems && Object.keys(file.stems).length > 0) {
+            stemStatusClass = 'stem-status-green';
+            stemTooltip = 'Stems ready! Use the volume sliders to mix individual instruments.';
+        } else if (file.id === currentStemFile?.id && stemProcessingInProgress) {
+            stemStatusClass = 'stem-status-yellow';
+            stemTooltip = 'Processing stems with Demucs... This takes 1-2 minutes.';
+        }
+
         html += `
             <div class="admin-file-item">
                 <div class="file-cover">
@@ -551,7 +563,10 @@ function refreshAdminLibrary() {
                     }
                 </div>
                 <div class="file-details">
-                    <div class="file-name">${displayName}</div>
+                    <div class="file-name">
+                        ${displayName}
+                        <span class="stem-status-bubble ${stemStatusClass}" data-file-id="${file.id}" title="${stemTooltip}"></span>
+                    </div>
                     <div class="file-meta">
                         <span>${formatFileSize(file.size)}</span>
                         <span class="upload-date">• ${formattedDate}</span>
@@ -567,6 +582,10 @@ function refreshAdminLibrary() {
 
 // Store sorted files globally so player can access them correctly
 let sortedMusicFiles = [];
+
+// Stem player variables (initialized at top of file)
+let stemMode = false;
+let currentTrackStems = null;
 
 function refreshPublicLibrary() {
     const container = document.getElementById('fileDisplay');
@@ -590,6 +609,18 @@ function refreshPublicLibrary() {
         const uploadDate = file.uploadDate || file.dateAdded;
         const formattedDate = uploadDate ? formatUploadDate(uploadDate) : '';
         
+        // Determine stem status for this file
+        let stemStatusClass = 'stem-status-red';
+        let stemTooltip = 'No stems yet. Play this track to start stem processing.';
+        
+        if (file.stems && Object.keys(file.stems).length > 0) {
+            stemStatusClass = 'stem-status-green';
+            stemTooltip = 'Stems ready! Use the volume sliders to mix individual instruments.';
+        } else if (file.id === currentStemFile?.id && stemProcessingInProgress) {
+            stemStatusClass = 'stem-status-yellow';
+            stemTooltip = 'Processing stems with Demucs... This takes 1-2 minutes.';
+        }
+
         html += `
             <div class="music-card" onclick="playMusicFromSorted(${index})">
                 <div class="card-cover">
@@ -599,14 +630,17 @@ function refreshPublicLibrary() {
                     }
                 </div>
                 <div class="card-info">
-                    <div class="card-title">${displayName}</div>
+                    <div class="card-title">
+                        ${displayName}
+                        <span class="stem-status-bubble ${stemStatusClass}" data-file-id="${file.id}" title="${stemTooltip}"></span>
+                    </div>
                     <div class="card-meta">
                         <span>${formatFileSize(file.size)}</span>
                         ${formattedDate ? `<span class="upload-date">• ${formattedDate}</span>` : ''}
                     </div>
                     <div class="card-actions">
                         <button onclick="event.stopPropagation(); playMusicFromSorted(${index})" class="play-btn">PLAY</button>
-                        <button onclick="event.stopPropagation(); downloadMusicFile('${file.streamUrl}', '${displayName}')" class="download-btn">SAVE</button>
+                        <button onclick="event.stopPropagation(); downloadMusicZip('${file.id}', '${displayName}')" class="download-btn">SAVE</button>
                     </div>
                 </div>
             </div>
@@ -624,6 +658,17 @@ let usingOriginalArray = true; // Track which array we're using
 
 function playMusic(index) {
     if (musicFiles[index]) {
+        const modal = document.getElementById('musicPlayerModal');
+        const file = musicFiles[index];
+        
+        // Check if the modal is already open with the same song
+        if (modal && modal.style.display === 'block' && 
+            currentStemFile && currentStemFile.id === file.id) {
+            // Just show the modal if it's the same song
+            console.log('🎵 Reopening existing player for same song');
+            return;
+        }
+        
         currentTrackIndex = index;
         usingOriginalArray = true;
         openMusicPlayer(index, musicFiles);
@@ -632,6 +677,17 @@ function playMusic(index) {
 
 function playMusicFromSorted(index) {
     if (sortedMusicFiles[index]) {
+        const modal = document.getElementById('musicPlayerModal');
+        const file = sortedMusicFiles[index];
+        
+        // Check if the modal is already open with the same song
+        if (modal && modal.style.display === 'block' && 
+            currentStemFile && currentStemFile.id === file.id) {
+            // Just show the modal if it's the same song
+            console.log('🎵 Reopening existing player for same song');
+            return;
+        }
+        
         currentTrackIndex = index;
         usingOriginalArray = false;
         openMusicPlayer(index, sortedMusicFiles);
@@ -651,17 +707,30 @@ function openMusicPlayer(trackIndex, filesArray) {
     }
     
     const file = filesArray[trackIndex];
-    const displayName = file.title || file.name;
-    console.log(`🎵 Opening player: ${displayName}`);
+    const userTitle = file.title; // User input title
+    const fileName = file.name;   // Original filename
+    console.log(`🎵 Opening player: ${userTitle || fileName}`);
     
     // Update UI
     player.src = file.streamUrl;
-    titleElement.textContent = displayName.toUpperCase();
-    trackNameElement.textContent = displayName;
+    
+    // Top title = user input title (or filename if no title)
+    titleElement.textContent = (userTitle || fileName).toUpperCase();
+    
+    // Bottom title = filename (or user title if no filename)
+    trackNameElement.textContent = fileName || userTitle;
+    
+    // Add stem status bubble to player title
+    const existingBubble = titleElement.querySelector('.stem-status-bubble');
+    if (existingBubble) {
+        existingBubble.remove();
+    }
+    const playerBubble = createStemStatusBubble(file);
+    titleElement.appendChild(playerBubble);
     
     // Update album art
     if (file.coverUrl) {
-        albumArt.innerHTML = `<img src="${file.coverUrl}" alt="${displayName}">`;
+        albumArt.innerHTML = `<img src="${file.coverUrl}" alt="${userTitle || fileName}">`;
     } else {
         albumArt.innerHTML = '<div class="default-art">♫</div>';
     }
@@ -669,6 +738,24 @@ function openMusicPlayer(trackIndex, filesArray) {
     // Show modal
     modal.style.display = 'block';
     musicPlayer = player;
+    
+    // The main player is now just a silent timer for synchronization
+    player.volume = 0;
+    player.muted = true;
+    
+    // Initialize stem controls and check for processing
+    currentTrackStems = file.stems || null;
+    currentStemFile = file;
+    initializeStemControls(file);
+    
+    // Update all bubbles immediately when track is selected
+    updateAllStemStatusBubbles();
+    
+    // If no stems exist, start processing
+    if (!file.stems || Object.keys(file.stems).length === 0) {
+        console.log('🔄 No stems found, starting processing...');
+        processStemsForFile(file);
+    }
     
     // Initialize custom controls
     initializeCustomControls();
@@ -679,11 +766,8 @@ function openMusicPlayer(trackIndex, filesArray) {
     // Set initial time display and controls
     updateTimeDisplay(0, 0);
     
-    // Auto-play
-    player.play().catch(e => {
-        console.log('Auto-play blocked:', e);
-        showStatus('CLICK PLAY TO START', 'success');
-    });
+    // Don't auto-play - wait for stems to load
+    showStatus('LOADING STEMS...', 'success');
 }
 
 function setupPlayerEventListeners() {
@@ -879,34 +963,10 @@ function setupPlayerButtons() {
     }
     
     // Mute button
-    const muteBtn = document.getElementById('muteBtn');
-    if (muteBtn && !muteBtn.hasAttribute('data-listener')) {
-        muteBtn.addEventListener('click', toggleMute);
-        muteBtn.setAttribute('data-listener', 'true');
-        console.log('🔄 Mute button listener set');
-    }
+    // Mute button removed - using individual stem controls only
 }
 
-function toggleMute() {
-    if (!musicPlayer) return;
-    
-    musicPlayer.muted = !musicPlayer.muted;
-    updateMuteButton();
-    showStatus(musicPlayer.muted ? 'MUTED' : 'UNMUTED', 'success');
-}
-
-function updateMuteButton() {
-    const muteBtn = document.getElementById('muteBtn');
-    if (!muteBtn || !musicPlayer) return;
-    
-    if (musicPlayer.muted || musicPlayer.volume === 0) {
-        muteBtn.textContent = '🔇';
-    } else if (musicPlayer.volume < 0.5) {
-        muteBtn.textContent = '🔉';
-    } else {
-        muteBtn.textContent = '🔊';
-    }
-}
+// Master volume and mute functions removed - now using individual stem controls only
 
 function updatePlayButton() {
     const btn = document.getElementById('playPauseBtn');
@@ -917,11 +977,22 @@ function updatePlayButton() {
 
 function closeMusicPlayer() {
     const modal = document.getElementById('musicPlayerModal');
+    
+    // Stop all stem players
+    Object.values(stemPlayers).forEach(stemPlayer => {
+        if (stemPlayer) {
+            stemPlayer.pause();
+            stemPlayer.currentTime = 0;
+        }
+    });
+    
+    // Stop main player
     if (musicPlayer) {
         musicPlayer.pause();
-        musicPlayer.src = '';
-        musicPlayer = null;
+        musicPlayer.currentTime = 0;
+        // Don't clear src or set to null - keep it for reopening
     }
+    
     if (modal) {
         modal.style.display = 'none';
     }
@@ -937,6 +1008,13 @@ function closeMusicPlayer() {
     updateTimeDisplay(0, 0);
     isPlaying = false;
     updatePlayButton();
+    
+    // Stop sync monitoring
+    if (window.stopSyncMonitoring) {
+        window.stopSyncMonitoring();
+    }
+    
+    showStatus('STOPPED', 'success');
 }
 
 function togglePlayPause() {
@@ -945,12 +1023,20 @@ function togglePlayPause() {
         return;
     }
     
+    // Check if we have stems loaded
+    const hasStemsLoaded = Object.keys(stemPlayers).length > 0;
+    
+    if (!hasStemsLoaded) {
+        showStatus('WAITING FOR STEMS...', 'error');
+        return;
+    }
+    
     if (musicPlayer.paused) {
-        console.log('▶️ Playing music');
+        console.log('▶️ Starting stem playback');
         musicPlayer.play().then(() => {
             isPlaying = true;
             updatePlayButton();
-            showStatus('PLAYING', 'success');
+            showStatus('PLAYING STEMS', 'success');
         }).catch(e => {
             console.error('❌ Play error:', e);
             showStatus('PLAYBACK ERROR', 'error');
@@ -958,7 +1044,7 @@ function togglePlayPause() {
             updatePlayButton();
         });
     } else {
-        console.log('⏸️ Pausing music');
+        console.log('⏸️ Pausing stem playback');
         musicPlayer.pause();
         isPlaying = false;
         updatePlayButton();
@@ -1042,6 +1128,111 @@ function downloadMusicFallback(url, filename) {
 // Keep old function for backward compatibility
 function downloadMusic(url, filename) {
     downloadMusicFile(url, filename);
+}
+
+async function downloadMusicZip(fileId, displayName) {
+    try {
+        console.log(`📦 Downloading zip for: ${displayName}`);
+        showStatus('PREPARING ZIP DOWNLOAD...', 'success');
+        
+        // Find the file object
+        const file = allFiles.find(f => f.id === fileId);
+        if (!file) {
+            console.error('❌ File not found:', fileId);
+            showStatus('FILE NOT FOUND', 'error');
+            return;
+        }
+        
+        // Check if stems exist
+        if (!file.stems || Object.keys(file.stems).length === 0) {
+            console.log('⚠️ No stems found, downloading original file only');
+            showStatus('NO STEMS - DOWNLOADING ORIGINAL', 'success');
+            await downloadMusicFile(file.streamUrl, displayName);
+            return;
+        }
+        
+        // Create zip with JSZip
+        const JSZip = window.JSZip || await loadJSZip();
+        const zip = new JSZip();
+        
+        // Add original file
+        console.log('📁 Adding original file to zip...');
+        const originalResponse = await fetch(file.streamUrl);
+        const originalBlob = await originalResponse.blob();
+        zip.file(`${displayName}.wav`, originalBlob);
+        
+        // Add stems
+        const stemTypes = ['vocals', 'drums', 'bass', 'other'];
+        for (const stemType of stemTypes) {
+            if (file.stems[stemType]) {
+                console.log(`📁 Adding ${stemType} stem to zip...`);
+                try {
+                    // Generate signed URL for stem
+                    const stemUrlResponse = await fetch('/api/generate-url', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            fileName: file.stems[stemType].fileName
+                        })
+                    });
+                    
+                    if (stemUrlResponse.ok) {
+                        const stemUrlData = await stemUrlResponse.json();
+                        const stemResponse = await fetch(stemUrlData.url);
+                        const stemBlob = await stemResponse.blob();
+                        zip.file(`${displayName}_${stemType}.wav`, stemBlob);
+                    } else {
+                        console.error(`❌ Failed to get URL for ${stemType} stem`);
+                    }
+                } catch (error) {
+                    console.error(`❌ Error adding ${stemType} stem:`, error);
+                }
+            }
+        }
+        
+        // Generate and download zip
+        console.log('📦 Generating zip file...');
+        showStatus('GENERATING ZIP...', 'success');
+        const zipBlob = await zip.generateAsync({type: 'blob'});
+        
+        // Create download link
+        const url = URL.createObjectURL(zipBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${displayName}_complete.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        showStatus('ZIP DOWNLOADED!', 'success');
+        console.log('✅ Zip download completed');
+        
+    } catch (error) {
+        console.error('❌ Error downloading zip:', error);
+        showStatus('ZIP DOWNLOAD FAILED', 'error');
+        
+        // Fallback to original file download
+        setTimeout(() => {
+            showStatus('DOWNLOADING ORIGINAL FILE...', 'success');
+            downloadMusicFile(file.streamUrl, displayName);
+        }, 2000);
+    }
+}
+
+async function loadJSZip() {
+    // Load JSZip library if not already loaded
+    if (window.JSZip) return window.JSZip;
+    
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+        script.onload = () => resolve(window.JSZip);
+        script.onerror = reject;
+        document.head.appendChild(script);
+    });
 }
 
 // Delete Function
@@ -1280,5 +1471,481 @@ setInterval(async () => {
     }
 }, 5000); // Check every 5 seconds
 
+// Stem Control Functions
+
+function initializeStemControls(file) {
+    console.log('🎵 Initializing stem controls for:', file.title || file.name);
+    currentStemFile = file;
+    
+    // Check if track has stems
+    if (file.stems && Object.keys(file.stems).length > 0) {
+        console.log('✅ Stems available, loading players');
+        loadStemPlayers(file.stems);
+    } else {
+        console.log('⚠️ No stems available, starting stem processing...');
+        
+        // Always try to process real stems
+        processStemsForFile(file);
+    }
+    
+    // Enable stem volume controls
+    enableStemControls();
+}
+
+async function loadStemPlayers(stems) {
+    stemPlayers = {};
+    const stemTypes = ['vocals', 'drums', 'bass', 'other'];
+    
+    console.log('🎵 Loading stem players with data:', stems);
+    
+    for (const stemType of stemTypes) {
+        if (stems[stemType]) {
+            const stemData = stems[stemType];
+            console.log(`🔍 Processing ${stemType} stem:`, stemData);
+            
+            if (stemData.url) {
+                // Direct URL available
+                stemPlayers[stemType] = new Audio();
+                stemPlayers[stemType].src = stemData.url;
+                stemPlayers[stemType].preload = 'metadata';
+                stemPlayers[stemType].volume = 1.0;
+                console.log(`✅ Loaded ${stemType} stem with direct URL`);
+            } else if (stemData.fileName) {
+                // Need to generate signed URL
+                try {
+                    console.log(`🔗 Generating signed URL for ${stemType}: ${stemData.fileName}`);
+                    const response = await fetch(`${API_BASE}/generate-url`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ fileName: stemData.fileName })
+                    });
+                    
+                    if (response.ok) {
+                        const urlData = await response.json();
+                        stemPlayers[stemType] = new Audio();
+                        stemPlayers[stemType].src = urlData.url;
+                        stemPlayers[stemType].preload = 'metadata';
+                        stemPlayers[stemType].volume = 1.0;
+                        console.log(`✅ Loaded ${stemType} stem with signed URL`);
+                    } else {
+                        console.error(`❌ Failed to get signed URL for ${stemType}`);
+                        continue;
+                    }
+                } catch (error) {
+                    console.error(`❌ Error generating URL for ${stemType}:`, error);
+                    continue;
+                }
+            } else {
+                console.log(`⚠️ No URL or fileName for ${stemType} stem`);
+                continue;
+            }
+            
+            // Add event listeners for each stem player
+            stemPlayers[stemType].addEventListener('loadedmetadata', () => {
+                console.log(`✅ ${stemType} stem metadata loaded`);
+            });
+            
+            stemPlayers[stemType].addEventListener('error', (e) => {
+                console.error(`❌ Error loading ${stemType} stem:`, e);
+            });
+            
+            stemPlayers[stemType].addEventListener('canplay', () => {
+                console.log(`🎵 ${stemType} stem ready to play`);
+            });
+        }
+    }
+    
+    console.log('🎵 Loaded stem players:', Object.keys(stemPlayers));
+    
+    // Setup synchronized playback with main player
+    setupStemSynchronization();
+}
+
+function enableStemControls() {
+    const stemControls = document.querySelectorAll('.stem-volume');
+    stemControls.forEach(control => {
+        control.style.opacity = '1';
+        control.style.pointerEvents = 'auto';
+    });
+    console.log('✅ Stem controls enabled');
+}
+
+async function processStemsForFile(file) {
+    if (stemProcessingInProgress) {
+        console.log('⚠️ Stem processing already in progress');
+        return;
+    }
+    
+    // Remove admin requirement for now to test functionality
+    console.log('🔄 Attempting stem processing...');
+    
+    stemProcessingInProgress = true;
+    console.log('🔄 Starting stem processing for:', file.title || file.name);
+    showStatus('PROCESSING STEMS...', 'success');
+    
+    // Update all status bubbles to show processing state
+    updateAllStemStatusBubbles();
+    
+    // Start periodic bubble updates during processing
+    startBubbleUpdateTimer();
+    
+    try {
+        console.log('📡 Making request to:', `${API_BASE}/process-stems`);
+        console.log('📦 Request data:', { 
+            fileId: file.id,
+            fileName: file.fileName || file.originalName || file.name
+        });
+        
+        const response = await fetch(`${API_BASE}/process-stems`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ 
+                fileId: file.id,
+                fileName: file.fileName || file.originalName || file.name
+            })
+        });
+        
+        console.log('📡 Response status:', response.status);
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || `Stem processing failed: ${response.statusText}`);
+        }
+        
+        const result = await response.json();
+        console.log('✅ Stem processing completed:', result);
+        
+        if (result.stems) {
+            // Update file data with new stems
+            file.stems = result.stems;
+            currentStemFile.stems = result.stems;
+            currentTrackStems = result.stems;
+            
+            // Update the file in the global arrays
+            const originalIndex = musicFiles.findIndex(f => f.id === file.id);
+            if (originalIndex !== -1) {
+                musicFiles[originalIndex].stems = result.stems;
+            }
+            
+            const sortedIndex = sortedMusicFiles.findIndex(f => f.id === file.id);
+            if (sortedIndex !== -1) {
+                sortedMusicFiles[sortedIndex].stems = result.stems;
+            }
+            
+            // Load stem players
+            await loadStemPlayers(result.stems);
+            showStatus('STEMS READY - CLICK PLAY!', 'success');
+            
+            // Update all status bubbles to show completed state
+            updateAllStemStatusBubbles();
+            
+            // Auto-start the silent timer once stems are ready
+            const mainPlayer = document.getElementById('musicPlayer');
+            if (mainPlayer && Object.keys(stemPlayers).length > 0) {
+                console.log('🎵 Auto-starting stem playback');
+                mainPlayer.play().catch(e => {
+                    console.log('Auto-play blocked:', e);
+                    showStatus('STEMS READY - CLICK PLAY!', 'success');
+                });
+            }
+        } else {
+            showStatus('STEM PROCESSING COMPLETED BUT NO STEMS RETURNED', 'error');
+        }
+        
+    } catch (error) {
+        console.error('❌ Stem processing error:', error);
+        showStatus(`STEM PROCESSING FAILED: ${error.message}`, 'error');
+    } finally {
+        stemProcessingInProgress = false;
+        // Update all status bubbles when processing ends
+        updateAllStemStatusBubbles();
+    }
+}
+
+function setupStemSynchronization() {
+    const mainPlayer = document.getElementById('musicPlayer');
+    if (!mainPlayer) return;
+    
+    // The main player is now just a timer - it's muted and used only for sync
+    mainPlayer.volume = 0;
+    mainPlayer.muted = true;
+    
+    // Sync all stems when main player plays/pauses
+    mainPlayer.addEventListener('play', () => {
+        console.log('🎵 Starting stem playback');
+        isPlaying = true;
+        
+        Object.keys(stemPlayers).forEach(stemType => {
+            if (stemPlayers[stemType]) {
+                // Always sync time first
+                stemPlayers[stemType].currentTime = mainPlayer.currentTime;
+                
+                // Only play if volume > 0
+                const slider = document.querySelector(`[data-stem="${stemType}"] .volume-slider-vertical`);
+                if (slider && slider.value > 0) {
+                    stemPlayers[stemType].play().catch(e => 
+                        console.log(`${stemType} stem play blocked:`, e)
+                    );
+                    console.log(`🎵 Started ${stemType} stem`);
+                }
+            }
+        });
+        
+        updatePlayButton();
+    });
+    
+    mainPlayer.addEventListener('pause', () => {
+        console.log('⏸️ Pausing all stems');
+        isPlaying = false;
+        
+        Object.keys(stemPlayers).forEach(stemType => {
+            if (stemPlayers[stemType]) {
+                stemPlayers[stemType].pause();
+            }
+        });
+        
+        updatePlayButton();
+    });
+    
+    // Aggressive synchronization system
+    let syncInterval = null;
+    
+    const startSyncMonitoring = () => {
+        if (syncInterval) clearInterval(syncInterval);
+        syncInterval = setInterval(() => {
+            if (!mainPlayer.paused && Object.keys(stemPlayers).length > 0) {
+                const masterTime = mainPlayer.currentTime;
+                
+                Object.keys(stemPlayers).forEach(stemType => {
+                    const stemPlayer = stemPlayers[stemType];
+                    if (stemPlayer) {
+                        const slider = document.querySelector(`[data-stem="${stemType}"] .volume-slider-vertical`);
+                        const shouldBePlaying = slider && slider.value > 0;
+                        
+                        if (shouldBePlaying) {
+                            // Check if stem is playing when it should be
+                            if (stemPlayer.paused) {
+                                console.log(`🔄 Restarting dropped ${stemType} stem`);
+                                stemPlayer.currentTime = masterTime;
+                                stemPlayer.play().catch(e => console.log(`${stemType} restart blocked:`, e));
+                            } else {
+                                // Check sync drift
+                                const timeDiff = Math.abs(stemPlayer.currentTime - masterTime);
+                                if (timeDiff > 0.15) { // Tighter sync
+                                    console.log(`🔄 Resyncing ${stemType} stem (drift: ${timeDiff.toFixed(2)}s)`);
+                                    stemPlayer.currentTime = masterTime;
+                                }
+                            }
+                        } else if (!stemPlayer.paused) {
+                            // Should be paused but isn't
+                            stemPlayer.pause();
+                        }
+                    }
+                });
+            }
+        }, 250); // Check every 250ms for tighter sync
+    };
+    
+    const stopSyncMonitoring = () => {
+        if (syncInterval) {
+            clearInterval(syncInterval);
+            syncInterval = null;
+        }
+    };
+    
+    mainPlayer.addEventListener('play', startSyncMonitoring);
+    mainPlayer.addEventListener('pause', stopSyncMonitoring);
+    mainPlayer.addEventListener('ended', stopSyncMonitoring);
+    
+    console.log('✅ Stems-only synchronization setup complete');
+}
+
+function setStemVolume(stemType, volume) {
+    console.log(`🔊 setStemVolume called: ${stemType} = ${volume}%`);
+    const volumePercent = volume / 100;
+    
+    // Handle individual stem volume
+    showStatus(`${stemType.toUpperCase()} VOLUME: ${volume}%`, 'success');
+    
+    if (stemPlayers[stemType]) {
+        // Set stem volume directly
+        stemPlayers[stemType].volume = volumePercent;
+        console.log(`✅ Set ${stemType} volume to ${volumePercent}`);
+        
+        // Manage playback based on volume
+        if (stemPlayers[stemType].paused && volume > 0 && isPlaying) {
+            // Sync time and start playing
+            const mainPlayer = document.getElementById('musicPlayer');
+            if (mainPlayer) {
+                stemPlayers[stemType].currentTime = mainPlayer.currentTime;
+            }
+            stemPlayers[stemType].play().catch(e => console.log('Stem play blocked:', e));
+            console.log(`🎵 Started playing ${stemType} stem`);
+        } else if (volume === 0) {
+            stemPlayers[stemType].pause();
+            console.log(`⏸️ Paused ${stemType} stem (volume = 0)`);
+        }
+    } else {
+        console.log(`⚠️ No stem player found for ${stemType} - stems may not be loaded yet`);
+    }
+}
+
+function downloadStem(stemType) {
+    if (!currentStemFile || !currentStemFile.stems || !currentStemFile.stems[stemType]) {
+        showStatus(`${stemType.toUpperCase()} STEM NOT AVAILABLE`, 'error');
+        return;
+    }
+    
+    const stemData = currentStemFile.stems[stemType];
+    const filename = `${currentStemFile.title || 'track'}_${stemType}.wav`;
+    
+    if (stemData.url) {
+        downloadMusicFile(stemData.url, filename);
+        showStatus(`DOWNLOADING ${stemType.toUpperCase()} STEM`, 'success');
+    } else {
+        showStatus(`${stemType.toUpperCase()} DOWNLOAD NOT AVAILABLE`, 'error');
+    }
+}
+
+function createTestStemPlayer(stemType) {
+    console.log(`🧪 Creating placeholder for ${stemType} - will be replaced by real stems`);
+    
+    // Don't create actual players - just show that we're waiting for real stems
+    showStatus(`WAITING FOR ${stemType.toUpperCase()} STEM...`, 'success');
+}
+
+function showStemProcessingStatus() {
+    console.log('🔄 Showing stem processing status');
+    showStatus('DEMUCS IS PROCESSING STEMS... THIS TAKES 1-2 MINUTES', 'success');
+    
+    setupStemSynchronization();
+}
+
+// Test stem controls function removed
+
+// Stem Status Bubble Functions
+function createStemStatusBubble(file) {
+    const bubble = document.createElement('span');
+    bubble.className = 'stem-status-bubble';
+    bubble.setAttribute('data-file-id', file.id);
+    
+    // Set initial status
+    updateStemStatusBubble(bubble, file);
+    
+    // Add tooltip
+    bubble.title = getStemStatusTooltip(file);
+    
+    return bubble;
+}
+
+function updateStemStatusBubble(bubble, file) {
+    if (!bubble) return;
+    
+    // Remove existing status classes
+    bubble.classList.remove('stem-status-red', 'stem-status-yellow', 'stem-status-green');
+    
+    // Determine status and add appropriate class
+    if (file.stems && Object.keys(file.stems).length > 0) {
+        // Green: Stems are ready
+        bubble.classList.add('stem-status-green');
+        bubble.title = 'Stems ready! Use the volume sliders to mix individual instruments.';
+    } else if (file.id === currentStemFile?.id && stemProcessingInProgress) {
+        // Yellow: Currently processing
+        bubble.classList.add('stem-status-yellow');
+        bubble.title = 'Processing stems with Demucs... This takes 1-2 minutes.';
+    } else {
+        // Red: No stems available
+        bubble.classList.add('stem-status-red');
+        bubble.title = 'No stems yet. Play this track to start stem processing.';
+    }
+}
+
+function getStemStatusTooltip(file) {
+    if (file.stems && Object.keys(file.stems).length > 0) {
+        const stemTypes = Object.keys(file.stems);
+        return `Stems ready: ${stemTypes.join(', ')}`;
+    } else if (file.id === currentStemFile?.id && stemProcessingInProgress) {
+        return 'Processing stems with Demucs... Please wait.';
+    } else {
+        return 'Click to play and start stem processing';
+    }
+}
+
+function updateAllStemStatusBubbles() {
+    console.log('🔄 Updating all stem status bubbles');
+    console.log('📊 Current state:', {
+        currentStemFile: currentStemFile?.id || 'none',
+        stemProcessingInProgress: stemProcessingInProgress,
+        totalFiles: musicFiles.length
+    });
+    
+    // Update bubbles in library (music cards)
+    const libraryBubbles = document.querySelectorAll('.music-card .stem-status-bubble');
+    console.log(`🔍 Found ${libraryBubbles.length} library bubbles`);
+    libraryBubbles.forEach(bubble => {
+        const fileId = bubble.getAttribute('data-file-id');
+        const file = musicFiles.find(f => f.id === fileId);
+        if (file) {
+            updateStemStatusBubble(bubble, file);
+            console.log(`✅ Updated bubble for ${file.title || file.name}`);
+        }
+    });
+    
+    // Update bubbles in admin panel
+    const adminBubbles = document.querySelectorAll('.admin-file-item .stem-status-bubble');
+    console.log(`🔍 Found ${adminBubbles.length} admin bubbles`);
+    adminBubbles.forEach(bubble => {
+        const fileId = bubble.getAttribute('data-file-id');
+        const file = musicFiles.find(f => f.id === fileId);
+        if (file) {
+            updateStemStatusBubble(bubble, file);
+        }
+    });
+    
+    // Update bubble in music player
+    const playerBubble = document.querySelector('.music-player h2 .stem-status-bubble');
+    if (playerBubble && currentStemFile) {
+        updateStemStatusBubble(playerBubble, currentStemFile);
+        console.log(`✅ Updated player bubble for ${currentStemFile.title || currentStemFile.name}`);
+    }
+}
+
+// Periodic bubble update system
+let bubbleUpdateInterval = null;
+
+function startBubbleUpdateTimer() {
+    // Clear any existing timer
+    if (bubbleUpdateInterval) {
+        clearInterval(bubbleUpdateInterval);
+    }
+    
+    // Update bubbles every 2 seconds while processing
+    bubbleUpdateInterval = setInterval(() => {
+        if (stemProcessingInProgress) {
+            console.log('🔄 Periodic bubble update during processing');
+            updateAllStemStatusBubbles();
+        } else {
+            // Stop the timer when not processing
+            clearInterval(bubbleUpdateInterval);
+            bubbleUpdateInterval = null;
+        }
+    }, 2000);
+}
+
+function stopBubbleUpdateTimer() {
+    if (bubbleUpdateInterval) {
+        clearInterval(bubbleUpdateInterval);
+        bubbleUpdateInterval = null;
+    }
+}
+
+// Stem controls are now fully integrated and synchronized with main player
+// Volume sliders control individual stem volumes  
+// Download buttons allow downloading individual stems
+// All stems play in sync with the main track automatically
+
 console.log('✅ MADE INFINITE ready');
-console.log('⌨️  Controls: SPACE=play/pause, ←→=tracks, M=mute, ESC=close'); 
+console.log('⌨️  Controls: SPACE=play/pause, ←→=tracks, M=mute, ESC=close');
+console.log('🎛️  Stem controls: Individual play/volume/download for each stem'); 

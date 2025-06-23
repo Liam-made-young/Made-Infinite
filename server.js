@@ -7,6 +7,9 @@ const rateLimit = require('express-rate-limit');
 const session = require('express-session');
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process');
+const { v4: uuidv4 } = require('uuid');
+const fsExtra = require('fs-extra');
 require('dotenv').config();
 
 // Storage configuration
@@ -416,6 +419,42 @@ async function uploadToGCS(musicFile, coverFile, metadata) {
             }
         }
         
+        // Process stems if enabled
+        let stems = null;
+        const processStems = process.env.ENABLE_STEM_PROCESSING === 'true';
+        
+        if (processStems) {
+            try {
+                console.log('🎵 Starting stem processing...');
+                
+                // Save original file temporarily for processing
+                const tempDir = path.join(__dirname, 'temp-processing');
+                const tempInputFile = path.join(tempDir, `${timestamp}_input.${musicFile.originalname.split('.').pop()}`);
+                const tempOutputDir = path.join(tempDir, `${timestamp}_stems`);
+                
+                fsExtra.ensureDirSync(tempDir);
+                fs.writeFileSync(tempInputFile, musicFile.buffer);
+                
+                        // Process stems
+        const stemResult = await processStemsWithDemucs(tempInputFile, tempOutputDir);
+                
+                if (stemResult.success) {
+                    // Upload stems to GCS
+                    const uploadedStems = await uploadStemsToStorage(stemResult.stems, metadata, STORAGE_MODES.GCS);
+                    stems = uploadedStems;
+                    console.log('✅ Stems processed and uploaded successfully');
+                }
+                
+                // Cleanup temp files
+                fsExtra.removeSync(tempInputFile);
+                fsExtra.removeSync(tempOutputDir);
+                
+            } catch (stemError) {
+                console.error('❌ Stem processing failed:', stemError.message);
+                // Continue without stems - don't fail the entire upload
+            }
+        }
+        
         return {
             id: `gcs_${timestamp}`,
             name: musicFile.originalname,
@@ -428,7 +467,9 @@ async function uploadToGCS(musicFile, coverFile, metadata) {
             gcsFileName: musicFileName,
             coverUrl: null, // We'll generate this on-demand
             gcsCoverFileName: coverFileName,
-            storageType: 'gcs'
+            storageType: 'gcs',
+            stems: stems, // Add stems data
+            hasStemProcessing: processStems
         };
     } catch (error) {
         console.error('❌ GCS Upload Error:', error.message);
@@ -499,6 +540,188 @@ async function generateSignedUrl(fileName, expirationHours = 24) {
     }
 }
 
+// Stem processing function
+async function processStemsWithDemucs(inputFilePath, outputDir) {
+    console.log('🎵 Starting stem separation with Demucs...');
+    
+    return new Promise((resolve, reject) => {
+        // Ensure output directory exists
+        fsExtra.ensureDirSync(outputDir);
+        
+        // Call improved Python stem processor
+        const pythonProcess = spawn('python3', [
+            path.join(__dirname, 'stem-processor-improved.py'),
+            inputFilePath,
+            outputDir
+        ]);
+        
+        let output = '';
+        let error = '';
+        
+        pythonProcess.stdout.on('data', (data) => {
+            const dataStr = data.toString();
+            console.log('🐍 Python:', dataStr.trim());
+            output += dataStr;
+        });
+        
+        pythonProcess.stderr.on('data', (data) => {
+            const errorStr = data.toString();
+            console.error('🐍 Python Error:', errorStr.trim());
+            error += errorStr;
+        });
+        
+        pythonProcess.on('close', (code) => {
+            if (code === 0) {
+                try {
+                    // Look for the FINAL_RESULT line in the Python output
+                    const lines = output.trim().split('\n');
+                    let result = null;
+                    
+                    // Find FINAL_RESULT and extract everything after it
+                    const finalResultIndex = output.indexOf('FINAL_RESULT:');
+                    if (finalResultIndex >= 0) {
+                        try {
+                            const jsonStr = output.substring(finalResultIndex + 'FINAL_RESULT:'.length).trim();
+                            console.log('🔍 Extracted JSON length:', jsonStr.length);
+                            result = JSON.parse(jsonStr);
+                        } catch (e) {
+                            console.error('❌ Failed to parse FINAL_RESULT JSON:', e);
+                            console.error('❌ JSON string was:', output.substring(finalResultIndex + 'FINAL_RESULT:'.length).trim().substring(0, 500) + '...');
+                        }
+                    }
+                    
+                    if (result && result.success) {
+                        console.log('✅ Stem separation successful');
+                        console.log('🎵 Found stems:', Object.keys(result.stems || {}).length);
+                        resolve(result);
+                    } else {
+                        console.error('❌ Stem separation failed:', result?.error || 'No valid result found');
+                        console.log('🔍 Debug - found result:', result);
+                        console.log('🔍 Debug - all lines:');
+                        lines.forEach((line, i) => {
+                            console.log(`Line ${i}: ${line.substring(0, 100)}...`);
+                        });
+                        reject(new Error(result?.error || 'Stem separation failed'));
+                    }
+                } catch (parseError) {
+                    console.error('❌ Failed to parse Python output:', parseError);
+                    console.log('🔍 Raw output:', output);
+                    reject(new Error('Failed to parse stem processing result'));
+                }
+            } else {
+                console.error(`❌ Python process exited with code ${code}`);
+                reject(new Error(`Stem processing failed with code ${code}: ${error}`));
+            }
+        });
+        
+        // Set timeout for long-running processes
+        setTimeout(() => {
+            pythonProcess.kill();
+            reject(new Error('Stem processing timeout (5 minutes)'));
+        }, 5 * 60 * 1000); // 5 minute timeout
+    });
+}
+
+// Upload stems to storage
+async function uploadStemsToStorage(stemFiles, metadata, storageType) {
+    console.log('📤 Uploading stems to storage...');
+    
+    const uploadedStems = {};
+    
+    for (const [stemName, stemPath] of Object.entries(stemFiles)) {
+        try {
+            const stemBuffer = fs.readFileSync(stemPath);
+            const stemFile = {
+                buffer: stemBuffer,
+                originalname: `${stemName}.wav`,
+                mimetype: 'audio/wav',
+                size: stemBuffer.length
+            };
+            
+            let uploadResult;
+            
+            switch (storageType) {
+                case STORAGE_MODES.GCS:
+                    if (isGCSConfigured) {
+                        uploadResult = await uploadSingleStemToGCS(stemFile, metadata, stemName);
+                    }
+                    break;
+                case STORAGE_MODES.CLOUDINARY:
+                    if (isCloudinaryConfigured) {
+                        uploadResult = await uploadSingleStemToCloudinary(stemFile, metadata, stemName);
+                    }
+                    break;
+                default:
+                    uploadResult = {
+                        url: `demo://${stemName}.wav`,
+                        fileName: `${stemName}.wav`
+                    };
+            }
+            
+            uploadedStems[stemName] = uploadResult;
+            console.log(`✅ Uploaded ${stemName} stem`);
+            
+        } catch (error) {
+            console.error(`❌ Failed to upload ${stemName} stem:`, error);
+            uploadedStems[stemName] = { error: error.message };
+        }
+    }
+    
+    return uploadedStems;
+}
+
+// Upload single stem to GCS
+async function uploadSingleStemToGCS(stemFile, metadata, stemName) {
+    const bucket = gcsStorage.bucket(process.env.GCS_BUCKET_NAME);
+    const timestamp = Date.now();
+    const fileName = `stems/${timestamp}_${metadata.title || 'unknown'}_${stemName}.wav`;
+    const fileRef = bucket.file(fileName);
+    
+    await fileRef.save(stemFile.buffer, {
+        metadata: {
+            contentType: stemFile.mimetype,
+            metadata: {
+                originalName: stemFile.originalname,
+                uploadDate: metadata.uploadDate || new Date().toISOString(),
+                title: metadata.title,
+                stemType: stemName
+            }
+        }
+    });
+    
+    return {
+        fileName: fileName,
+        url: null // Will generate signed URL on-demand
+    };
+}
+
+// Upload single stem to Cloudinary
+async function uploadSingleStemToCloudinary(stemFile, metadata, stemName) {
+    return new Promise((resolve, reject) => {
+        const uploadOptions = {
+            resource_type: 'video', // Cloudinary uses 'video' for audio
+            public_id: `stems/${Date.now()}_${metadata.title || 'unknown'}_${stemName}`,
+            tags: ['stem', stemName, metadata.title || 'unknown'],
+            context: {
+                title: metadata.title || 'Unknown',
+                stemType: stemName,
+                uploadDate: metadata.uploadDate || new Date().toISOString()
+            }
+        };
+        
+        cloudinary.uploader.upload_stream(uploadOptions, (error, result) => {
+            if (error) {
+                reject(error);
+            } else {
+                resolve({
+                    fileName: result.public_id,
+                    url: result.secure_url
+                });
+            }
+        }).end(stemFile.buffer);
+    });
+}
+
 // Updated upload endpoint
 app.post('/api/upload', requireAdmin, upload.fields([
     { name: 'musicFile', maxCount: 1 },
@@ -551,19 +774,19 @@ app.post('/api/upload', requireAdmin, upload.fields([
         }
 
         console.log(`📁 Before push: ${musicFiles.length} files`);
-        musicFiles.push(fileData);
+            musicFiles.push(fileData);
         console.log(`📁 After push: ${musicFiles.length} files`);
         
         // Save to persistent storage
         saveMusicFiles();
         
-        res.json({ 
-            success: true, 
-            file: fileData,
+            res.json({ 
+                success: true, 
+                file: fileData,
             storageMode: storageMode,
             warning: storageMode === STORAGE_MODES.LOCAL ? 'Demo mode: File uploaded but not stored. Configure GCS or Cloudinary for real uploads.' : null
-        });
-        
+            });
+
     } catch (error) {
         console.error('❌ Upload error:', error);
         
@@ -631,8 +854,8 @@ app.delete('/api/files/:fileId', requireAdmin, async (req, res) => {
             console.log('☁️  Deleting from Cloudinary...');
             try {
                 if (file.cloudinaryId) {
-                    await cloudinary.uploader.destroy(file.cloudinaryId, { resource_type: 'auto' });
-                    console.log('✅ Music file deleted from Cloudinary');
+                await cloudinary.uploader.destroy(file.cloudinaryId, { resource_type: 'auto' });
+                console.log('✅ Music file deleted from Cloudinary');
                 }
                 
                 if (file.coverCloudinaryId) {
@@ -650,9 +873,9 @@ app.delete('/api/files/:fileId', requireAdmin, async (req, res) => {
         
         // Save to persistent storage
         saveMusicFiles();
-        
+
         res.json({ success: true, message: 'File deleted successfully' });
-        
+
     } catch (error) {
         console.error('❌ Delete error:', error);
         res.status(500).json({ error: 'Delete failed: ' + error.message });
@@ -706,6 +929,145 @@ app.get('/api/files/:fileId/url', async (req, res) => {
     } catch (error) {
         console.error('Error refreshing URL:', error);
         res.status(500).json({ error: 'Failed to refresh URL' });
+    }
+});
+
+// Generate signed URL for any GCS file (for stems)
+app.post('/api/generate-url', async (req, res) => {
+    try {
+        const { fileName } = req.body;
+        
+        if (!fileName) {
+            return res.status(400).json({ error: 'fileName required' });
+        }
+        
+        if (isGCSConfigured) {
+            const signedUrl = await generateSignedUrl(fileName, 24);
+            res.json({ url: signedUrl });
+        } else {
+            res.status(400).json({ error: 'Google Cloud Storage not configured' });
+        }
+    } catch (error) {
+        console.error('Error generating signed URL:', error);
+        res.status(500).json({ error: 'Failed to generate signed URL' });
+    }
+});
+
+// Stem processing endpoint
+app.post('/api/process-stems', async (req, res) => {
+    console.log('🎵 Stem processing request received');
+    
+    try {
+        const { fileId, fileName } = req.body;
+        
+        if (!fileId) {
+            return res.status(400).json({ error: 'File ID required' });
+        }
+        
+        // Find the file
+        const file = musicFiles.find(f => f.id === fileId);
+        if (!file) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+        
+        console.log(`🔄 Processing stems for: ${file.name}`);
+        
+        // Check if stems already exist
+        if (file.stems && Object.keys(file.stems).length > 0) {
+            console.log('✅ Stems already exist');
+            return res.json({ 
+                success: true, 
+                message: 'Stems already processed',
+                stems: file.stems 
+            });
+        }
+        
+        // Create temp directory for processing
+        const tempDir = path.join(__dirname, 'temp-processing');
+        const outputDir = path.join(__dirname, 'stems-output');
+        fsExtra.ensureDirSync(tempDir);
+        fsExtra.ensureDirSync(outputDir);
+        
+        // Download or get the audio file
+        let inputFilePath;
+        
+        if (file.storageType === 'gcs' && isGCSConfigured) {
+            // Download from GCS
+            const bucket = gcsStorage.bucket(process.env.GCS_BUCKET_NAME);
+            const gcsFile = bucket.file(file.gcsFileName);
+            inputFilePath = path.join(tempDir, `temp_${Date.now()}.${path.extname(file.name)}`);
+            
+            await gcsFile.download({ destination: inputFilePath });
+            console.log('✅ Downloaded file from GCS for processing');
+            
+        } else if (file.storageType === 'cloudinary' && isCloudinaryConfigured) {
+            // Download from Cloudinary
+            const https = require('https');
+            const http = require('http');
+            inputFilePath = path.join(tempDir, `temp_${Date.now()}.${path.extname(file.name)}`);
+            
+            await new Promise((resolve, reject) => {
+                const protocol = file.streamUrl.startsWith('https:') ? https : http;
+                const fileStream = fs.createWriteStream(inputFilePath);
+                
+                protocol.get(file.streamUrl, (response) => {
+                    response.pipe(fileStream);
+                    fileStream.on('finish', () => {
+                        fileStream.close();
+                        resolve();
+                    });
+                }).on('error', reject);
+            });
+            
+            console.log('✅ Downloaded file from Cloudinary for processing');
+            
+        } else {
+            return res.status(400).json({ error: 'File not available for processing' });
+        }
+        
+        // Process stems with Demucs
+        const stemResult = await processStemsWithDemucs(inputFilePath, outputDir);
+        
+        if (!stemResult.success) {
+            throw new Error(stemResult.error || 'Stem processing failed');
+        }
+        
+        // Upload stems to storage
+        const stemFiles = {};
+        // Convert stems object to the expected format
+        Object.entries(stemResult.stems).forEach(([stemName, stemPath]) => {
+            stemFiles[stemName] = stemPath;
+        });
+        
+        const uploadedStems = await uploadStemsToStorage(stemFiles, {
+            title: file.name,
+            uploadDate: new Date().toISOString()
+        }, storageMode);
+        
+        // Update file record with stems
+        file.stems = uploadedStems;
+        saveMusicFiles();
+        
+        // Clean up temp files
+        fs.unlinkSync(inputFilePath);
+        Object.values(stemResult.stems).forEach(stemPath => {
+            if (fs.existsSync(stemPath)) {
+                fs.unlinkSync(stemPath);
+            }
+        });
+        
+        console.log('✅ Stem processing completed successfully');
+        res.json({ 
+            success: true, 
+            message: 'Stems processed successfully',
+            stems: uploadedStems 
+        });
+        
+    } catch (error) {
+        console.error('❌ Stem processing error:', error);
+        res.status(500).json({ 
+            error: 'Stem processing failed: ' + error.message 
+        });
     }
 });
 

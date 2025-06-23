@@ -1,7 +1,9 @@
 # Environment variables
 .env
 .env.local
-.env.production
+.env.development.local
+.env.test.local
+.env.production.local
 
 # Google Drive credentials
 credentials.json
@@ -151,4 +153,19 @@ musicFiles.json
 
 # Documentation (keep in repo)
 # STORAGE_LIMITS.md
-made-infinite-music-38f8537d34e9.json
+made-infinite-music-*.json
+
+# Google Cloud Service Account Keys
+*.json
+!package*.json
+
+# Stem Processing
+spleeter-env/
+temp-processing/
+stems-output/
+*.wav
+*.mp3
+*.m4a
+*.flac
+__pycache__/
+*.pyc
