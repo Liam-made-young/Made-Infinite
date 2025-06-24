@@ -50,7 +50,7 @@ def process_with_demucs_v4(input_file, output_dir):
             '-d', 'cpu',       # Use CPU
             '--mp3',           # Output as MP3 for smaller files
             '--mp3-bitrate', '192',  # Lower bitrate to save memory
-            '--segment', '7',   # Process in 7-second chunks (within model limit)
+            '--segment', '10',  # Process in 10-second chunks (memory efficient)
             '--overlap', '0.1', # Minimal overlap to save memory
             '-j', '1',         # Single job to avoid memory issues
             '-o', str(output_dir),
@@ -136,9 +136,10 @@ def process_with_demucs_light(input_file, output_dir):
             '-d', 'cpu',          # Use CPU
             '--mp3',              # Output as MP3
             '--mp3-bitrate', '128', # Lower bitrate
-            '--segment', '5',     # Very small chunks (within model limits)
+            '--segment', '5',     # Very small chunks
             '--overlap', '0.05',  # Minimal overlap
             '-j', '1',            # Single job
+            '--no-split',         # Don't split into chunks
             '-o', str(output_dir),
             str(input_file)
         ]

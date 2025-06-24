@@ -1,32 +1,34 @@
-# Use Node.js 18 with Python support
-FROM node:18-bullseye
+# Optimized Dockerfile for Google Cloud Run with Demucs
+FROM python:3.10-slim
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    python3-dev \
+    curl \
     ffmpeg \
     git \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Node.js 18
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && apt-get update \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
 # Create app directory
 WORKDIR /app
 
-# Copy package files
+# Copy Python requirements and install first (for better caching)
+COPY requirements.txt ./
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Pre-download Demucs models during build (not runtime)
+RUN python3 -c "import demucs.pretrained; demucs.pretrained.get_model('htdemucs')" || echo "htdemucs download skipped"
+RUN python3 -c "import demucs.pretrained; demucs.pretrained.get_model('mdx_extra')" || echo "mdx_extra download skipped"
+
+# Copy package files and install Node.js dependencies
 COPY package*.json ./
-
-# Install Node.js dependencies
-RUN npm install
-
-# Install Python dependencies for Demucs
-RUN pip3 install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-RUN pip3 install demucs
-
-# Pre-download Demucs models to avoid runtime downloads
-RUN python3 -c "import demucs.pretrained; demucs.pretrained.get_model('htdemucs')" || echo "htdemucs download failed, continuing..."
-RUN python3 -c "import demucs.pretrained; demucs.pretrained.get_model('mdx_extra')" || echo "mdx_extra download failed, continuing..."
+RUN npm ci --only=production && npm cache clean --force
 
 # Copy application files
 COPY . .
@@ -34,8 +36,13 @@ COPY . .
 # Create necessary directories
 RUN mkdir -p temp-processing stems-output
 
-# Expose port
-EXPOSE 3000
+# Set environment variables
+ENV PYTHONPATH=/usr/local/lib/python3.10/site-packages
+ENV NODE_ENV=production
+ENV PORT=8080
 
-# Start command
+# Expose port (Cloud Run uses PORT env var)
+EXPOSE 8080
+
+# Use exec form to ensure proper signal handling
 CMD ["node", "server.js"] 
