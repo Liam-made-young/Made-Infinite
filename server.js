@@ -776,19 +776,90 @@ app.post('/api/upload', requireAdmin, upload.fields([
                 break;
         }
 
+        // Process stems automatically if enabled
+        if (process.env.ENABLE_STEM_PROCESSING === 'true') {
+            console.log('🎵 Starting automatic stem processing...');
+            
+            try {
+                // Create temp directory for processing
+                const tempDir = path.join(__dirname, 'temp-processing');
+                const outputDir = path.join(__dirname, 'stems-output');
+                fsExtra.ensureDirSync(tempDir);
+                fsExtra.ensureDirSync(outputDir);
+                
+                // Use the uploaded file directly for processing
+                let inputFilePath;
+                
+                if (storageMode === STORAGE_MODES.GCS && fileData.gcsFileName) {
+                    // Download from GCS for processing
+                    const bucket = gcsStorage.bucket(process.env.GCS_BUCKET_NAME);
+                    const gcsFile = bucket.file(fileData.gcsFileName);
+                    inputFilePath = path.join(tempDir, `temp_${Date.now()}.${path.extname(musicFile.originalname)}`);
+                    
+                    await gcsFile.download({ destination: inputFilePath });
+                    console.log('✅ Downloaded file from GCS for stem processing');
+                    
+                } else {
+                    // Use the original uploaded file buffer
+                    inputFilePath = path.join(tempDir, `temp_${Date.now()}.${path.extname(musicFile.originalname)}`);
+                    fs.writeFileSync(inputFilePath, musicFile.buffer);
+                    console.log('✅ Created temp file for stem processing');
+                }
+                
+                // Process stems with Demucs
+                console.log('🔄 Processing stems with Demucs...');
+                const stemResult = await processStemsWithDemucs(inputFilePath, outputDir);
+                
+                if (stemResult.success) {
+                    // Upload stems to storage
+                    const stemFiles = {};
+                    Object.entries(stemResult.stems).forEach(([stemName, stemPath]) => {
+                        stemFiles[stemName] = stemPath;
+                    });
+                    
+                    const uploadedStems = await uploadStemsToStorage(stemFiles, {
+                        title: fileData.name,
+                        uploadDate: fileData.uploadDate
+                    }, storageMode);
+                    
+                    // Add stems to file data
+                    fileData.stems = uploadedStems;
+                    console.log('✅ Stems processed and uploaded successfully');
+                    
+                    // Clean up temp files
+                    fs.unlinkSync(inputFilePath);
+                    Object.values(stemResult.stems).forEach(stemPath => {
+                        if (fs.existsSync(stemPath)) {
+                            fs.unlinkSync(stemPath);
+                        }
+                    });
+                } else {
+                    console.log('⚠️ Stem processing failed, continuing without stems');
+                    // Clean up temp file
+                    if (fs.existsSync(inputFilePath)) {
+                        fs.unlinkSync(inputFilePath);
+                    }
+                }
+                
+            } catch (stemError) {
+                console.error('❌ Stem processing error (continuing without stems):', stemError);
+            }
+        }
+        
         console.log(`📁 Before push: ${musicFiles.length} files`);
-            musicFiles.push(fileData);
+        musicFiles.push(fileData);
         console.log(`📁 After push: ${musicFiles.length} files`);
         
         // Save to persistent storage
         saveMusicFiles();
         
-            res.json({ 
-                success: true, 
-                file: fileData,
+        res.json({ 
+            success: true, 
+            file: fileData,
             storageMode: storageMode,
+            stemsProcessed: fileData.stems ? Object.keys(fileData.stems).length > 0 : false,
             warning: storageMode === STORAGE_MODES.LOCAL ? 'Demo mode: File uploaded but not stored. Configure GCS or Cloudinary for real uploads.' : null
-            });
+        });
 
     } catch (error) {
         console.error('❌ Upload error:', error);

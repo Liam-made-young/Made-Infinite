@@ -450,17 +450,37 @@ async function uploadFiles() {
             const data = await response.json();
             
             if (response.ok) {
-                // Update progress for completed file
-                updateUploadProgress(
-                    ((i + 1) / files.length) * 100, 
-                    `✅ ${file.name}`, 
-                    i + 1, 
-                    files.length
-                );
-                console.log(`✅ Upload ${i + 1}/${files.length} complete:`, file.name);
+                // Show stem processing status if stems were processed
+                if (data.stemsProcessed) {
+                    updateUploadProgress(
+                        ((i + 0.5) / files.length) * 100, 
+                        `🎵 Processing stems for ${file.name}...`, 
+                        i + 1, 
+                        files.length
+                    );
+                    // Give more time for stem processing feedback
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    
+                    updateUploadProgress(
+                        ((i + 1) / files.length) * 100, 
+                        `✅ ${file.name} + stems ready!`, 
+                        i + 1, 
+                        files.length
+                    );
+                    console.log(`✅ Upload ${i + 1}/${files.length} complete with stems:`, file.name);
+                } else {
+                    // Update progress for completed file (no stems)
+                    updateUploadProgress(
+                        ((i + 1) / files.length) * 100, 
+                        `✅ ${file.name}`, 
+                        i + 1, 
+                        files.length
+                    );
+                    console.log(`✅ Upload ${i + 1}/${files.length} complete:`, file.name);
+                }
                 
                 // Brief pause to show completion
-                await new Promise(resolve => setTimeout(resolve, 500));
+                await new Promise(resolve => setTimeout(resolve, 800));
             } else {
                 throw new Error(data.error || 'Upload failed');
             }
@@ -473,7 +493,7 @@ async function uploadFiles() {
         }
     }
     
-    showStatus('UPLOAD COMPLETE', 'success');
+    showStatus('UPLOAD COMPLETE - STEMS READY!', 'success');
     
     // Hide progress bar after completion
     setTimeout(() => {
