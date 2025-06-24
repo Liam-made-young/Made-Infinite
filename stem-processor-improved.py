@@ -19,8 +19,8 @@ def log_message(message):
 def check_dependencies():
     """Check if required dependencies are installed"""
     dependencies = {
-        'demucs': 'demucs --help',
-        'spleeter': 'spleeter --help'
+        'demucs': 'demucs --help'
+        # Spleeter disabled due to compatibility issues
     }
     
     available = {}
@@ -35,6 +35,10 @@ def check_dependencies():
         except (subprocess.TimeoutExpired, FileNotFoundError):
             available[name] = False
             log_message(f"❌ {name} not available")
+    
+    # Force disable Spleeter
+    available['spleeter'] = False
+    log_message("❌ Spleeter force-disabled (compatibility issues)")
     
     return available
 
@@ -167,35 +171,9 @@ def process_with_demucs_light(input_file, output_dir):
         return False
 
 def process_with_spleeter(input_file, output_dir):
-    """Process stems using Spleeter as fallback"""
-    log_message("🎵 Processing with Spleeter (fallback)")
-    
-    try:
-        cmd = [
-            'spleeter', 'separate',
-            '-p', 'spleeter:4stems-16kHz',  # 4 stems model
-            '-o', str(output_dir),
-            str(input_file)
-        ]
-        
-        log_message(f"🔧 Running: {' '.join(cmd)}")
-        
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=300  # 5 minute timeout
-        )
-        
-        if result.returncode != 0:
-            raise Exception(f"Spleeter failed: {result.stderr}")
-        
-        log_message("✅ Spleeter processing completed")
-        return True
-        
-    except Exception as e:
-        log_message(f"❌ Spleeter failed: {str(e)}")
-        return False
+    """Spleeter disabled due to numpy/tensorflow compatibility issues"""
+    log_message("❌ Spleeter disabled (incompatible with current environment)")
+    return False
 
 def find_output_files(output_dir, file_stem):
     """Find the generated stem files"""
