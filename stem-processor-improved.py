@@ -56,12 +56,57 @@ def process_with_demucs_v4(input_file, output_dir):
         
         log_message(f"🔧 Running: {' '.join(cmd)}")
         
-        result = subprocess.run(
+        # Run with real-time output for better progress tracking
+        process = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=600  # 10 minute timeout
+            bufsize=1,
+            universal_newlines=True
         )
+        
+        stdout_lines = []
+        stderr_lines = []
+        
+        # Read output in real-time
+        import select
+        import time
+        
+        timeout = 600  # 10 minutes
+        start_time = time.time()
+        
+        while process.poll() is None:
+            if time.time() - start_time > timeout:
+                process.kill()
+                raise Exception("Process timed out after 10 minutes")
+            
+            # Read available output
+            if process.stderr:
+                line = process.stderr.readline()
+                if line:
+                    stderr_lines.append(line.strip())
+                    log_message(f"🔄 Demucs: {line.strip()}")
+            
+            if process.stdout:
+                line = process.stdout.readline()  
+                if line:
+                    stdout_lines.append(line.strip())
+                    log_message(f"📊 Demucs: {line.strip()}")
+            
+            time.sleep(0.1)
+        
+        # Get final return code
+        return_code = process.returncode
+        
+        # Create result object
+        class Result:
+            def __init__(self, returncode, stdout_lines, stderr_lines):
+                self.returncode = returncode
+                self.stdout = '\n'.join(stdout_lines)
+                self.stderr = '\n'.join(stderr_lines)
+        
+        result = Result(return_code, stdout_lines, stderr_lines)
         
         if result.returncode != 0:
             log_message(f"❌ Demucs stderr: {result.stderr}")
