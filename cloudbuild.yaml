@@ -26,7 +26,8 @@ steps:
       '--max-instances', '1',
       '--min-instances', '0',
       '--allow-unauthenticated',
-      '--port', '8080'
+      '--port', '8080',
+      '--set-env-vars', 'NODE_ENV=production,STORAGE_MODE=gcs,GCS_BUCKET_NAME=made-infinite-bucket-2025,ENABLE_STEM_PROCESSING=true,PYTHON_PATH=python3,STEM_PROCESSING_TIMEOUT=1800000,MAX_CONCURRENT_PROCESSING=2,ADMIN_PASSWORD=made2024'
     ]
 
 # Use high-CPU machine for faster builds
