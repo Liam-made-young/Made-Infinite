@@ -1,11 +1,11 @@
 [build]
-builder = "nixpacks"
+builder = "dockerfile"
 
 [deploy]
-startCommand = "node server.js"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 300
 restartPolicyType = "on_failure"
 
 [env]
-NODE_ENV = "production" 
+NODE_ENV = "production"
+ENABLE_STEM_PROCESSING = "true" 
