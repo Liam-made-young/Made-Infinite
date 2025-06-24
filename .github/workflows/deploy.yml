@@ -40,18 +40,17 @@ jobs:
 
     - name: Build and Deploy
       run: |
-        # Use minimal Dockerfile for free tier
+        # Deploy with full Demucs support using existing 8GB allocation
         gcloud run deploy $SERVICE \
           --source . \
-          --dockerfile Dockerfile.minimal \
           --region $REGION \
-          --memory 2Gi \
-          --cpu 1 \
-          --timeout 300 \
+          --memory 8Gi \
+          --cpu 2 \
+          --timeout 3600 \
           --allow-unauthenticated \
           --port 8080 \
           --max-instances 1 \
-          --set-env-vars="NODE_ENV=production,STORAGE_MODE=gcs,GCS_BUCKET_NAME=made-infinite-bucket-2025,ENABLE_STEM_PROCESSING=false"
+          --set-env-vars="NODE_ENV=production,STORAGE_MODE=gcs,GCS_BUCKET_NAME=made-infinite-bucket-2025,ENABLE_STEM_PROCESSING=true,PYTHON_PATH=python3,STEM_PROCESSING_TIMEOUT=1800000,MAX_CONCURRENT_PROCESSING=2"
 
     - name: Show URL
       run: |
