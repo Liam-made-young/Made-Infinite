@@ -73,11 +73,18 @@ try {
         gcsConfig.projectId = process.env.GOOGLE_CLOUD_PROJECT_ID;
     }
     
-    if (Object.keys(gcsConfig).length > 0 && process.env.GCS_BUCKET_NAME) {
-        gcsStorage = new Storage(gcsConfig);
+    // Check if GCS can be configured (either with explicit config or Cloud Run default auth)
+    if (process.env.GCS_BUCKET_NAME) {
+        // Use provided config if available, otherwise rely on Cloud Run default authentication
+        gcsStorage = Object.keys(gcsConfig).length > 0 ? new Storage(gcsConfig) : new Storage();
         isGCSConfigured = true;
         console.log('🌩️  Google Cloud Storage configured successfully');
         console.log(`📦 Using bucket: ${process.env.GCS_BUCKET_NAME}`);
+        if (Object.keys(gcsConfig).length > 0) {
+            console.log('🔑 Using explicit credentials');
+        } else {
+            console.log('🔑 Using Cloud Run default service account');
+        }
         
         // Test the connection asynchronously
         setTimeout(async () => {
@@ -94,7 +101,7 @@ try {
             }
         }, 1000);
     } else {
-        console.log('⚠️  Google Cloud Storage not configured - missing config or bucket name');
+        console.log('⚠️  Google Cloud Storage not configured - missing bucket name');
         console.log('📝 Config keys:', Object.keys(gcsConfig));
         console.log('📝 Bucket name:', process.env.GCS_BUCKET_NAME);
     }
