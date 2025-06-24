@@ -39,17 +39,20 @@ def check_dependencies():
     return available
 
 def process_with_demucs_v4(input_file, output_dir):
-    """Process stems using Demucs v4 with high quality settings"""
-    log_message("🎵 Processing with Demucs v4 (high quality)")
+    """Process stems using Demucs v4 with Railway-optimized settings"""
+    log_message("🎵 Processing with Demucs v4 (Railway optimized)")
     
     try:
-        # Use htdemucs_ft model for best quality
+        # Use memory-efficient settings for Railway
         cmd = [
             'python3', '-m', 'demucs.separate',
-            '-n', 'htdemucs',  # Use basic htdemucs model (more reliable)
-            '-d', 'cpu',  # Use CPU for stability
-            '--mp3',            # Output as MP3 for smaller files
-            '--mp3-bitrate', '320',  # High quality MP3
+            '-n', 'htdemucs',  # Basic model (less memory intensive)
+            '-d', 'cpu',       # Use CPU
+            '--mp3',           # Output as MP3 for smaller files
+            '--mp3-bitrate', '192',  # Lower bitrate to save memory
+            '--segment', '10',  # Process in 10-second chunks (memory efficient)
+            '--overlap', '0.1', # Minimal overlap to save memory
+            '-j', '1',         # Single job to avoid memory issues
             '-o', str(output_dir),
             str(input_file)
         ]
@@ -121,6 +124,48 @@ def process_with_demucs_v4(input_file, output_dir):
         log_message(f"❌ Demucs v4 failed: {str(e)}")
         return False
 
+def process_with_demucs_light(input_file, output_dir):
+    """Process stems using Demucs with ultra-light settings for low memory"""
+    log_message("🎵 Processing with Demucs (ultra-light mode)")
+    
+    try:
+        # Minimal memory settings for Railway
+        cmd = [
+            'python3', '-m', 'demucs.separate',
+            '-n', 'mdx_extra',    # Lighter model
+            '-d', 'cpu',          # Use CPU
+            '--mp3',              # Output as MP3
+            '--mp3-bitrate', '128', # Lower bitrate
+            '--segment', '5',     # Very small chunks
+            '--overlap', '0.05',  # Minimal overlap
+            '-j', '1',            # Single job
+            '--no-split',         # Don't split into chunks
+            '-o', str(output_dir),
+            str(input_file)
+        ]
+        
+        log_message(f"🔧 Running (light): {' '.join(cmd)}")
+        
+        # Simplified execution for light mode
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minute timeout for light mode
+        )
+        
+        if result.returncode != 0:
+            log_message(f"❌ Demucs light stderr: {result.stderr}")
+            log_message(f"❌ Demucs light stdout: {result.stdout}")
+            raise Exception(f"Demucs light failed with code {result.returncode}: {result.stderr}")
+        
+        log_message("✅ Demucs light processing completed")
+        return True
+        
+    except Exception as e:
+        log_message(f"❌ Demucs light failed: {str(e)}")
+        return False
+
 def process_with_spleeter(input_file, output_dir):
     """Process stems using Spleeter as fallback"""
     log_message("🎵 Processing with Spleeter (fallback)")
@@ -156,9 +201,20 @@ def find_output_files(output_dir, file_stem):
     """Find the generated stem files"""
     stems = {}
     
-    # Look for Demucs output structure
-    demucs_dir = output_dir / 'htdemucs' / file_stem
-    if demucs_dir.exists():
+    # Look for Demucs output structure (multiple possible model directories)
+    possible_dirs = [
+        output_dir / 'htdemucs' / file_stem,
+        output_dir / 'mdx_extra' / file_stem,
+        output_dir / file_stem  # Fallback
+    ]
+    
+    demucs_dir = None
+    for dir_path in possible_dirs:
+        if dir_path.exists():
+            demucs_dir = dir_path
+            break
+    
+    if demucs_dir:
         log_message(f"🔍 Found Demucs output in: {demucs_dir}")
         stem_mapping = {
             'vocals.mp3': 'vocals',
@@ -231,9 +287,14 @@ def main():
     success = False
     file_stem = input_file.stem
     
-    # Try Demucs v4 first (best quality)
+    # Try Demucs v4 first (Railway optimized)
     if available.get('demucs', False):
         success = process_with_demucs_v4(input_file, output_dir)
+        
+        # If Demucs fails, try with even lighter settings
+        if not success:
+            log_message("🔄 Trying Demucs with ultra-light settings")
+            success = process_with_demucs_light(input_file, output_dir)
     
     # Fall back to Spleeter if Demucs fails
     if not success and available.get('spleeter', False):

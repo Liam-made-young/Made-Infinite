@@ -25,7 +25,8 @@ RUN pip3 install torch torchaudio --index-url https://download.pytorch.org/whl/c
 RUN pip3 install demucs
 
 # Pre-download Demucs models to avoid runtime downloads
-RUN python3 -c "import demucs.pretrained; demucs.pretrained.get_model('htdemucs')"
+RUN python3 -c "import demucs.pretrained; demucs.pretrained.get_model('htdemucs')" || echo "htdemucs download failed, continuing..."
+RUN python3 -c "import demucs.pretrained; demucs.pretrained.get_model('mdx_extra')" || echo "mdx_extra download failed, continuing..."
 
 # Copy application files
 COPY . .
