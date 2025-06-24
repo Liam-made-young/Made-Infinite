@@ -436,20 +436,78 @@ async function uploadFiles() {
                 files.length
             );
             
-            const response = await fetch(`${API_BASE}/upload`, {
+            // Use direct GCS upload for large files (bypasses Cloud Run limits)
+            console.log(`📤 Starting direct upload for: ${file.name} (${file.size} bytes)`);
+            
+            // Step 1: Get signed upload URL
+            const signedUrlResponse = await fetch(`${API_BASE}/upload/signed-url`, {
                 method: 'POST',
                 credentials: 'include',
-                body: formData
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    fileName: file.name,
+                    contentType: file.type,
+                    fileSize: file.size
+                })
             });
             
-            // Handle 413 Payload Too Large specifically
-            if (response.status === 413) {
-                throw new Error('File too large for server. Try a smaller file or check your internet connection.');
+            if (!signedUrlResponse.ok) {
+                const errorData = await signedUrlResponse.json();
+                throw new Error(errorData.error || 'Failed to get upload URL');
             }
             
-            const data = await response.json();
+            const { uploadUrl, gcsFileName, uploadId } = await signedUrlResponse.json();
             
-            if (response.ok) {
+            // Step 2: Upload directly to GCS
+            updateUploadProgress(
+                ((i + 0.2) / files.length) * 100, 
+                `📤 Uploading ${file.name} to cloud...`, 
+                i + 1, 
+                files.length
+            );
+            
+            const gcsUploadResponse = await fetch(uploadUrl, {
+                method: 'PUT',
+                body: file,
+                headers: {
+                    'Content-Type': file.type
+                }
+            });
+            
+            if (!gcsUploadResponse.ok) {
+                throw new Error(`Upload to cloud storage failed: ${gcsUploadResponse.status}`);
+            }
+            
+            // Step 3: Confirm upload and process
+            updateUploadProgress(
+                ((i + 0.5) / files.length) * 100, 
+                `⚙️ Processing ${file.name}...`, 
+                i + 1, 
+                files.length
+            );
+            
+            const confirmResponse = await fetch(`${API_BASE}/upload/confirm`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    gcsFileName: gcsFileName,
+                    uploadId: uploadId,
+                    title: finalTitle,
+                    originalName: file.name,
+                    fileSize: file.size,
+                    mimeType: file.type
+                })
+            });
+            
+            if (!confirmResponse.ok) {
+                const errorData = await confirmResponse.json();
+                throw new Error(errorData.error || 'Failed to confirm upload');
+            }
+            
+            const data = await confirmResponse.json();
+            
+            if (confirmResponse.ok) {
                 // Show stem processing status if stems were processed
                 if (data.stemsProcessed) {
                     updateUploadProgress(

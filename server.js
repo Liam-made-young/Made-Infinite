@@ -1027,6 +1027,150 @@ app.post('/api/generate-url', async (req, res) => {
     }
 });
 
+// Generate signed upload URL for direct GCS upload (bypasses Cloud Run size limits)
+app.post('/api/upload/signed-url', requireAdmin, async (req, res) => {
+    try {
+        const { fileName, contentType, fileSize } = req.body;
+        
+        if (!fileName || !contentType) {
+            return res.status(400).json({ error: 'fileName and contentType are required' });
+        }
+
+        // Check file size limits
+        const maxSize = 500 * 1024 * 1024; // 500MB
+        if (fileSize && fileSize > maxSize) {
+            return res.status(400).json({ error: `File too large. Maximum size is ${maxSize / (1024 * 1024)}MB` });
+        }
+
+        if (!isGCSConfigured) {
+            return res.status(400).json({ error: 'Google Cloud Storage not configured' });
+        }
+
+        const bucket = gcsStorage.bucket(process.env.GCS_BUCKET_NAME);
+        const timestamp = Date.now();
+        const gcsFileName = `music/${timestamp}_${fileName}`;
+        const file = bucket.file(gcsFileName);
+
+        // Generate signed upload URL
+        const [url] = await file.getSignedUrl({
+            version: 'v4',
+            action: 'write',
+            expires: Date.now() + 60 * 60 * 1000, // 1 hour
+            contentType: contentType,
+        });
+
+        console.log(`🔗 Generated upload URL for: ${fileName} (${fileSize} bytes)`);
+
+        res.json({ 
+            uploadUrl: url, 
+            gcsFileName: gcsFileName,
+            uploadId: timestamp 
+        });
+    } catch (error) {
+        console.error('Error generating signed upload URL:', error);
+        res.status(500).json({ error: 'Failed to generate upload URL' });
+    }
+});
+
+// Confirm upload and process file after direct GCS upload
+app.post('/api/upload/confirm', requireAdmin, async (req, res) => {
+    try {
+        const { gcsFileName, uploadId, title, originalName, fileSize, mimeType, coverGcsFileName } = req.body;
+        
+        if (!gcsFileName || !originalName) {
+            return res.status(400).json({ error: 'gcsFileName and originalName are required' });
+        }
+
+        // Create file metadata
+        const fileData = {
+            id: `gcs_${uploadId}`,
+            name: originalName,
+            title: title || originalName.replace(/\.[^/.]+$/, ''),
+            size: fileSize || 0,
+            mimeType: mimeType || 'audio/mpeg',
+            createdTime: new Date().toISOString(),
+            uploadDate: new Date().toISOString(),
+            gcsFileName: gcsFileName,
+            gcsCoverFileName: coverGcsFileName || null,
+            streamUrl: null, // Will generate signed URL on-demand
+            coverUrl: null,
+            storageType: 'gcs'
+        };
+
+        // Add to music files
+        musicFiles.push(fileData);
+        saveMusicFiles();
+
+        console.log(`✅ Direct upload confirmed: ${originalName}`);
+
+        // Process stems if enabled
+        let stemsProcessed = false;
+        if (process.env.ENABLE_STEM_PROCESSING === 'true') {
+            try {
+                console.log('🎵 Starting stem processing...');
+                
+                // Create temp directory for processing
+                const tempDir = path.join(__dirname, 'temp-processing');
+                const outputDir = path.join(__dirname, 'stems-output');
+                fsExtra.ensureDirSync(tempDir);
+                fsExtra.ensureDirSync(outputDir);
+                
+                // Download from GCS for processing
+                const bucket = gcsStorage.bucket(process.env.GCS_BUCKET_NAME);
+                const gcsFile = bucket.file(gcsFileName);
+                const inputFilePath = path.join(tempDir, `temp_${Date.now()}.${path.extname(originalName)}`);
+                
+                await gcsFile.download({ destination: inputFilePath });
+                console.log('✅ Downloaded file from GCS for stem processing');
+                
+                // Process stems with Demucs
+                const stemResult = await processStemsWithDemucs(inputFilePath, outputDir);
+                
+                if (stemResult.success) {
+                    // Upload stems to storage
+                    const stemFiles = {};
+                    Object.entries(stemResult.stems).forEach(([stemName, stemPath]) => {
+                        stemFiles[stemName] = stemPath;
+                    });
+                    
+                    const uploadedStems = await uploadStemsToStorage(stemFiles, {
+                        title: fileData.name,
+                        uploadDate: fileData.uploadDate
+                    }, STORAGE_MODES.GCS);
+                    
+                    // Update file record with stems
+                    fileData.stems = uploadedStems;
+                    saveMusicFiles();
+                    stemsProcessed = true;
+                    
+                    // Clean up temp files
+                    fs.unlinkSync(inputFilePath);
+                    Object.values(stemResult.stems).forEach(stemPath => {
+                        if (fs.existsSync(stemPath)) {
+                            fs.unlinkSync(stemPath);
+                        }
+                    });
+                    
+                    console.log('✅ Stems processed successfully for direct upload');
+                } else {
+                    console.error('❌ Stem processing failed:', stemResult.error);
+                }
+            } catch (error) {
+                console.error('❌ Stem processing failed:', error);
+            }
+        }
+
+        res.json({ 
+            success: true, 
+            file: fileData,
+            stemsProcessed 
+        });
+    } catch (error) {
+        console.error('Error confirming upload:', error);
+        res.status(500).json({ error: 'Failed to confirm upload' });
+    }
+});
+
 // Stem processing endpoint
 app.post('/api/process-stems', async (req, res) => {
     console.log('🎵 Stem processing request received');
