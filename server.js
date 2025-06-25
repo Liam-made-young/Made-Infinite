@@ -580,6 +580,17 @@ async function processStemsWithDemucs(inputFilePath, outputDir) {
             error += errorStr;
         });
         
+        // Set timeout for long-running processes – configurable via env var
+        const stemTimeoutMs = parseInt(process.env.STEM_PROCESSING_TIMEOUT, 10) || (20 * 60 * 1000); // default 20 min
+
+        const timeoutTimer = setTimeout(() => {
+            pythonProcess.kill();
+            reject(new Error(`Stem processing timeout (${stemTimeoutMs / 60000} minutes)`));
+        }, stemTimeoutMs);
+
+        // Clear the timer on normal exit
+        pythonProcess.on('close', () => clearTimeout(timeoutTimer));
+        
         pythonProcess.on('close', (code) => {
             if (code === 0) {
                 try {
@@ -623,12 +634,6 @@ async function processStemsWithDemucs(inputFilePath, outputDir) {
                 reject(new Error(`Stem processing failed with code ${code}: ${error}`));
             }
         });
-        
-        // Set timeout for long-running processes
-        setTimeout(() => {
-            pythonProcess.kill();
-            reject(new Error('Stem processing timeout (5 minutes)'));
-        }, 5 * 60 * 1000); // 5 minute timeout
     });
 }
 
