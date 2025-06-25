@@ -43,20 +43,20 @@ def check_dependencies():
     return available
 
 def process_with_demucs_v4(input_file, output_dir):
-    """Process stems using Demucs v4 with Railway-optimized settings"""
-    log_message("🎵 Processing with Demucs v4 (Railway optimized)")
+    """Process stems using Demucs v4 with Cloud Run-optimized settings"""
+    log_message("🎵 Processing with Demucs v4 (Cloud Run optimized)")
     
     try:
-        # Use memory-efficient settings for Railway
+        # Use memory-efficient settings for Cloud Run (8GB RAM, 2 CPU)
         cmd = [
             'python3', '-m', 'demucs.separate',
-            '-n', 'htdemucs',  # Basic model (less memory intensive)
-            '-d', 'cpu',       # Use CPU
+            '-n', 'htdemucs',  # Basic model 
+            '-d', 'cpu',       # Use CPU (Cloud Run has 2 CPU cores)
             '--mp3',           # Output as MP3 for smaller files
-            '--mp3-bitrate', '192',  # Lower bitrate to save memory
-            '--segment', '10',  # Process in 10-second chunks (memory efficient)
-            '--overlap', '0.1', # Minimal overlap to save memory
-            '-j', '1',         # Single job to avoid memory issues
+            '--mp3-bitrate', '192',  # Good quality vs size balance
+            '--segment', '20',  # Larger chunks since we have 8GB RAM
+            '--overlap', '0.2', # Better quality with more overlap
+            '-j', '2',         # Use both CPU cores
             '-o', str(output_dir),
             str(input_file)
         ]
@@ -133,7 +133,7 @@ def process_with_demucs_light(input_file, output_dir):
     log_message("🎵 Processing with Demucs (ultra-light mode)")
     
     try:
-        # Minimal memory settings for Railway
+        # Minimal memory settings for Cloud Run
         cmd = [
             'python3', '-m', 'demucs.separate',
             '-n', 'mdx_extra',    # Lighter model
@@ -265,7 +265,7 @@ def main():
     success = False
     file_stem = input_file.stem
     
-    # Try Demucs v4 first (Railway optimized)
+    # Try Demucs v4 first (Cloud Run optimized)
     if available.get('demucs', False):
         success = process_with_demucs_v4(input_file, output_dir)
         

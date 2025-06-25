@@ -850,6 +850,10 @@ app.post('/api/upload', requireAdmin, upload.fields([
                 
             } catch (stemError) {
                 console.error('❌ Stem processing error (continuing without stems):', stemError);
+                // Clean up temp file if it exists
+                if (typeof inputFilePath !== 'undefined' && fs.existsSync(inputFilePath)) {
+                    fs.unlinkSync(inputFilePath);
+                }
             }
         }
         
@@ -1368,9 +1372,9 @@ const server = app.listen(PORT, () => {
     }
 });
 
-// Increase server timeout for large file uploads (10 minutes)
-server.timeout = 600000;
-server.keepAliveTimeout = 600000;
-server.headersTimeout = 610000;
+// Increase server timeout for large file uploads and stem processing (20 minutes)
+server.timeout = 1200000;
+server.keepAliveTimeout = 1200000;
+server.headersTimeout = 1210000;
 
 module.exports = app; 
