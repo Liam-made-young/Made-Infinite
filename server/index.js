@@ -1,55 +1,49 @@
-const express = require('express');
-const multer = require('multer');
-const cors = require('cors');
-const helmet = require('helmet');
-const compression = require('compression');
-const rateLimit = require('express-rate-limit');
-const session = require('express-session');
-const path = require('path');
-const fs = require('fs');
-const { spawn } = require('child_process');
-const { v4: uuidv4 } = require('uuid');
-const fsExtra = require('fs-extra');
-require('dotenv').config();
+import express from 'express';
+import multer from 'multer';
+import cors from 'cors';
+import helmet from 'helmet';
+import compression from 'compression';
+import rateLimit from 'express-rate-limit';
+import session from 'express-session';
+import path from 'path';
+import fs from 'fs';
+import { spawn } from 'child_process';
+import { v4 as uuidv4 } from 'uuid';
+import fsExtra from 'fs-extra';
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+import { Storage } from '@google-cloud/storage';
+import ffmpeg from 'fluent-ffmpeg';
+import ffmpegStatic from 'ffmpeg-static';
+import sharp from 'sharp';
+import https from 'https';
+import http from 'http';
+import fetch from 'node-fetch';
+
+// Configure dotenv
+dotenv.config();
+
+// ES module equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Set ffmpeg path for thumbnail generation
+ffmpeg.setFfmpegPath(ffmpegStatic);
 
 // Storage configuration
 const STORAGE_MODES = {
-    CLOUDINARY: 'cloudinary',
     GCS: 'gcs',
     LOCAL: 'local'
 };
 
 // Initialize storage providers
-let cloudinary = null;
 let gcsStorage = null;
-let isCloudinaryConfigured = false;
 let isGCSConfigured = false;
-
-// Try to configure Cloudinary
-try {
-    cloudinary = require('cloudinary').v2;
-    
-    if (process.env.CLOUDINARY_CLOUD_NAME && 
-        process.env.CLOUDINARY_API_KEY && 
-        process.env.CLOUDINARY_API_SECRET &&
-        process.env.CLOUDINARY_CLOUD_NAME !== 'demo') {
-        
-        cloudinary.config({
-            cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-            api_key: process.env.CLOUDINARY_API_KEY,
-            api_secret: process.env.CLOUDINARY_API_SECRET
-        });
-        
-        isCloudinaryConfigured = true;
-        console.log('☁️  Cloudinary configured successfully');
-    }
-} catch (error) {
-    console.log('⚠️  Cloudinary not available');
-}
 
 // Try to configure Google Cloud Storage
 try {
-    const { Storage } = require('@google-cloud/storage');
+    // Storage is already imported at the top
     
     let gcsConfig = {};
     
@@ -110,13 +104,10 @@ try {
     console.log('🔍 Full error:', error);
 }
 
-// Determine storage mode
-const storageMode = process.env.STORAGE_MODE || 
-    (isGCSConfigured ? STORAGE_MODES.GCS : 
-     isCloudinaryConfigured ? STORAGE_MODES.CLOUDINARY : 
-     STORAGE_MODES.LOCAL);
+// Determine storage mode (force GCS)
+const storageMode = STORAGE_MODES.GCS;
 
-console.log(`🗄️  Storage mode: ${storageMode.toUpperCase()}`);
+console.log(`️  Storage mode: ${storageMode.toUpperCase()}`);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -133,7 +124,7 @@ app.use(helmet({
             scriptSrcAttr: ["'unsafe-inline'"], // Allow inline event handlers
             styleSrc: ["'self'", "'unsafe-inline'"],
             imgSrc: ["'self'", "data:", "https:"],
-            mediaSrc: ["'self'", "blob:", "https://res.cloudinary.com", "https://www.soundjay.com", "https://storage.googleapis.com"],
+            mediaSrc: ["'self'", "blob:", "https://www.soundjay.com", "https://storage.googleapis.com"],
             connectSrc: ["'self'", "https:"],
             fontSrc: ["'self'", "https:", "data:"]
         }
@@ -142,7 +133,7 @@ app.use(helmet({
 
 app.use(compression());
 app.use(cors({
-    origin: process.env.NODE_ENV === 'production' ? process.env.HOSTING_URL : true,
+    origin: process.env.HOSTING_URL === 'http://localhost:3000' ? 'http://localhost:5173' : process.env.HOSTING_URL,
     credentials: true
 }));
 
@@ -175,20 +166,22 @@ app.use(session({
     secret: process.env.SESSION_SECRET || 'Yourawaveydude4145!!!!',
     resave: false,
     saveUninitialized: false,
+    name: 'sessionId', // Explicit session name
     cookie: {
-        secure: process.env.NODE_ENV === 'production', // Use secure cookies in production
+        secure: false, // Always false for localhost development
         httpOnly: true,
-        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+        maxAge: 24 * 60 * 60 * 1000, // 24 hours
+        sameSite: 'lax' // Explicit SameSite policy for localhost
     }
 }));
 
 // Serve static files with proper MIME types
-const express_static = express.static(__dirname, {
-    setHeaders: (res, path) => {
-        if (path.endsWith('.js')) {
+const express_static = express.static(path.join(__dirname, '..'), {
+    setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.js')) {
             res.set('Content-Type', 'application/javascript');
         }
-        if (path.endsWith('.css')) {
+        if (filePath.endsWith('.css')) {
             res.set('Content-Type', 'text/css');
         }
     }
@@ -205,28 +198,33 @@ const upload = multer({
         files: 2
     },
     fileFilter: (req, file, cb) => {
-        if (file.mimetype.startsWith('audio/') || file.mimetype.startsWith('image/')) {
+        if (file.mimetype.startsWith('audio/') || 
+            file.mimetype.startsWith('image/') || 
+            file.mimetype.startsWith('video/')) {
             cb(null, true);
         } else {
-            cb(new Error('Only audio and image files are allowed!'), false);
+            cb(new Error('Only audio, image, and video files are allowed!'), false);
         }
     }
 });
 
 // Admin middleware
 const requireAdmin = (req, res, next) => {
-    console.log('🔒 Admin check - session:', req.session.isAdmin ? 'Authenticated' : 'Not authenticated');
-    
     if (req.session.isAdmin) {
         next();
     } else {
+        console.log('❌ Admin access denied');
         res.status(401).json({ error: 'Admin authentication required' });
     }
 };
 
 // Persistent storage for file metadata
-const STORAGE_FILE = path.join(__dirname, 'musicFiles.json');
-let musicFiles = [];
+  const STORAGE_FILE = path.join(__dirname, 'musicFiles.json');
+  const VIDEO_STORAGE_FILE = path.join(__dirname, 'videoFiles.json');
+  const STREAM_STORAGE_FILE = path.join(__dirname, 'liveStreams.json');
+  let musicFiles = [];
+  let videoFiles = [];
+  let liveStreams = [];
 
 // Load existing files from storage
 function loadMusicFiles() {
@@ -255,11 +253,61 @@ function saveMusicFiles() {
     }
 }
 
+function loadVideoFiles() {
+    try {
+        if (fs.existsSync(VIDEO_STORAGE_FILE)) {
+            const data = fs.readFileSync(VIDEO_STORAGE_FILE, 'utf8');
+            videoFiles = JSON.parse(data) || [];
+            console.log(`📼 Loaded ${videoFiles.length} video files from storage`);
+        } else {
+            console.log('📼 No existing video files storage found, starting fresh');
+        }
+    } catch (error) {
+        console.error('❌ Error loading video files:', error);
+        videoFiles = [];
+    }
+}
+
+function saveVideoFiles() {
+    try {
+        fs.writeFileSync(VIDEO_STORAGE_FILE, JSON.stringify(videoFiles || [], null, 2));
+        console.log(`💾 Saved ${videoFiles.length} video files to storage`);
+    } catch (error) {
+        console.error('❌ Error saving video files:', error);
+    }
+}
+
+function loadLiveStreams() {
+    try {
+        if (fs.existsSync(STREAM_STORAGE_FILE)) {
+            const data = fs.readFileSync(STREAM_STORAGE_FILE, 'utf8');
+            liveStreams = JSON.parse(data) || [];
+            console.log(`📺 Loaded ${liveStreams.length} live streams from storage`);
+        } else {
+            console.log('📺 No existing streams storage found, starting fresh');
+        }
+    } catch (error) {
+        console.error('❌ Error loading live streams:', error);
+        liveStreams = [];
+    }
+}
+
+function saveLiveStreams() {
+    try {
+        fs.writeFileSync(STREAM_STORAGE_FILE, JSON.stringify(liveStreams || [], null, 2));
+        console.log(`💾 Saved ${liveStreams.length} live streams to storage`);
+    } catch (error) {
+        console.error('❌ Error saving live streams:', error);
+    }
+}
+
 // Load files on startup
 loadMusicFiles();
+loadVideoFiles();
+loadLiveStreams();
 
-// Add some demo files for testing (only if no files exist and Cloudinary not configured)
-if (!isCloudinaryConfigured && musicFiles.length === 0) {
+// Add some demo files for testing (only if no files exist)
+if (musicFiles.length === 0) {
     musicFiles = [
         {
             id: 'demo_1',
@@ -316,67 +364,160 @@ app.post('/api/admin/logout', (req, res) => {
     });
 });
 
-// Storage handler functions
-async function uploadToCloudinary(musicFile, coverFile, metadata) {
-    console.log('☁️  Uploading to Cloudinary...');
+// YouTube API helper functions
+function extractYouTubeId(url) {
+    console.log('🔍 Extracting YouTube ID from URL:', url);
     
-    const musicResult = await new Promise((resolve, reject) => {
-        cloudinary.uploader.upload_stream(
-            {
-                resource_type: 'video',
-                folder: 'made-infinite-music',
-                public_id: `music_${Date.now()}_${musicFile.originalname.replace(/\.[^/.]+$/, "")}`,
-                format: 'mp3',
-                transformation: [{ quality: 'auto:good' }]
-            },
-            (error, result) => {
-                if (error) {
-                    console.error('Cloudinary upload error:', error);
-                    reject(new Error(`Cloudinary upload failed: ${error.message}`));
-                } else {
-                    resolve(result);
-                }
-            }
-        ).end(musicFile.buffer);
-    });
-
-    let coverResult = null;
-    if (coverFile) {
-        try {
-            coverResult = await new Promise((resolve, reject) => {
-                cloudinary.uploader.upload_stream(
-                    {
-                        resource_type: 'image',
-                        folder: 'made-infinite-covers',
-                        public_id: `cover_${Date.now()}_${coverFile.originalname.replace(/\.[^/.]+$/, "")}`,
-                        transformation: [{ width: 500, height: 500, crop: 'fill', quality: 'auto:good' }]
-                    },
-                    (error, result) => {
-                        if (error) reject(error);
-                        else resolve(result);
-                    }
-                ).end(coverFile.buffer);
-            });
-        } catch (error) {
-            console.error('Cover upload failed:', error);
+    // Support multiple YouTube URL formats
+    const patterns = [
+        /(?:youtube\.com\/watch\?v=)([^&\n?#]+)/,           // youtube.com/watch?v=VIDEO_ID
+        /(?:youtu\.be\/)([^&\n?#]+)/,                      // youtu.be/VIDEO_ID
+        /(?:youtube\.com\/embed\/)([^&\n?#]+)/,            // youtube.com/embed/VIDEO_ID
+        /(?:youtube\.com\/v\/)([^&\n?#]+)/,                // youtube.com/v/VIDEO_ID
+        /(?:youtube\.com\/watch\?.*v=)([^&\n?#]+)/,        // youtube.com/watch?other_param&v=VIDEO_ID
+        /(?:m\.youtube\.com\/watch\?v=)([^&\n?#]+)/,       // m.youtube.com/watch?v=VIDEO_ID
+        /(?:youtube\.com\/live\/)([^&\n?#]+)/,             // youtube.com/live/VIDEO_ID
+        /(?:youtube\.com\/shorts\/)([^&\n?#]+)/,           // youtube.com/shorts/VIDEO_ID
+    ];
+    
+    for (const pattern of patterns) {
+        const match = url.match(pattern);
+        if (match && match[1]) {
+            console.log('✅ Extracted YouTube ID:', match[1]);
+            return match[1];
         }
     }
-
-    return {
-        id: musicResult.public_id,
-        name: musicFile.originalname,
-        title: metadata.title || musicFile.originalname.replace(/\.[^/.]+$/, ''),
-        size: musicFile.size,
-        mimeType: 'audio/mpeg',
-        createdTime: new Date().toISOString(),
-        uploadDate: metadata.uploadDate || new Date().toISOString(),
-        streamUrl: musicResult.secure_url,
-        cloudinaryId: musicResult.public_id,
-        coverUrl: coverResult ? coverResult.secure_url : null,
-        coverCloudinaryId: coverResult ? coverResult.public_id : null,
-        storageType: 'cloudinary'
-    };
+    
+    console.log('❌ No YouTube ID found in URL');
+    return null;
 }
+
+async function getYouTubeVideoInfo(videoId) {
+    console.log(`📺 Getting YouTube video info for ID: ${videoId}`);
+    
+    if (!process.env.YOUTUBE_API_KEY) {
+        console.log('⚠️  No YouTube API key found. Stream status checking disabled.');
+        return null;
+    }
+    
+    try {
+        const apiUrl = `https://www.googleapis.com/youtube/v3/videos?id=${videoId}&part=snippet,liveStreamingDetails&key=${process.env.YOUTUBE_API_KEY}`;
+        console.log('🔗 YouTube API URL:', apiUrl.replace(process.env.YOUTUBE_API_KEY, 'HIDDEN'));
+        
+        const response = await fetch(apiUrl);
+        
+        console.log('📊 YouTube API response status:', response.status);
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('❌ YouTube API HTTP error:', response.status, errorText);
+            throw new Error(`YouTube API error: ${response.status} - ${errorText}`);
+        }
+        
+        const data = await response.json();
+        console.log('📄 YouTube API response data:', JSON.stringify(data, null, 2));
+        
+        if (data.error) {
+            console.error('❌ YouTube API returned error:', data.error);
+            throw new Error(`YouTube API error: ${data.error.message || data.error}`);
+        }
+        
+        if (data.items && data.items.length > 0) {
+            const video = data.items[0];
+            const snippet = video.snippet;
+            const liveDetails = video.liveStreamingDetails;
+            
+            console.log('✅ Video found:', snippet.title);
+            console.log('📊 Live broadcast content:', snippet.liveBroadcastContent);
+            
+            return {
+                title: snippet.title,
+                description: snippet.description,
+                thumbnail: snippet.thumbnails.high?.url || snippet.thumbnails.default?.url,
+                isLive: snippet.liveBroadcastContent === 'live',
+                status: snippet.liveBroadcastContent, // 'live', 'upcoming', 'none'
+                startTime: liveDetails?.actualStartTime || liveDetails?.scheduledStartTime,
+                endTime: liveDetails?.actualEndTime,
+                viewerCount: liveDetails?.concurrentViewers ? parseInt(liveDetails.concurrentViewers) : undefined
+            };
+        } else {
+            console.log('❌ No video found with ID:', videoId);
+            return null;
+        }
+        
+    } catch (error) {
+        console.error('❌ YouTube API error:', error.message);
+        console.error('❌ Full error:', error);
+        return null;
+    }
+}
+
+async function checkAllStreamStatuses() {
+    console.log('🔄 Checking all stream statuses...');
+    
+    for (const stream of liveStreams) {
+        const info = await getYouTubeVideoInfo(stream.youtubeId);
+        
+        if (info) {
+            const wasLive = stream.isLive;
+            stream.isLive = info.isLive;
+            stream.status = info.status === 'live' ? 'live' : info.status === 'upcoming' ? 'upcoming' : 'ended';
+            stream.viewers = info.viewerCount;
+            
+            // If stream just ended, convert to video
+            if (wasLive && !info.isLive && stream.status === 'ended') {
+                console.log(`📺➡️📼 Stream "${stream.title}" ended, converting to video`);
+                await convertStreamToVideo(stream);
+            }
+        }
+    }
+    
+    saveLiveStreams();
+}
+
+async function convertStreamToVideo(stream) {
+    try {
+        // Create a video entry for the ended stream (stays accessible via YouTube embed)
+        const videoData = {
+            id: `video_${Date.now()}_${stream.youtubeId}`,
+            name: `${stream.title}.mp4`,
+            title: stream.title,
+            fileName: `${stream.title}.mp4`,
+            streamUrl: stream.youtubeUrl,
+            thumbnailUrl: stream.thumbnail,
+            size: 0, // YouTube videos don't have file size
+            uploadDate: new Date().toISOString(),
+            dateAdded: new Date().toISOString(),
+            description: stream.description,
+            source: 'stream', // Mark as stream-derived
+            originalStreamId: stream.id,
+            youtubeId: stream.youtubeId, // Keep YouTube ID for embed
+            isStreamVideo: true // Flag to identify stream-derived videos
+        };
+        
+        videoFiles.push(videoData);
+        saveVideoFiles();
+        
+        // Also mark the original stream as archived
+        const streamIndex = liveStreams.findIndex(s => s.id === stream.id);
+        if (streamIndex > -1) {
+            liveStreams[streamIndex].status = 'archived';
+            liveStreams[streamIndex].isLive = false;
+            liveStreams[streamIndex].archivedDate = new Date().toISOString();
+            liveStreams[streamIndex].videoId = videoData.id; // Link to video entry
+            saveLiveStreams();
+        }
+        
+        console.log(`✅ Stream converted to video and archived: ${stream.title}`);
+    } catch (error) {
+        console.error('❌ Error converting stream to video:', error);
+    }
+}
+
+// Check stream statuses every 5 minutes
+setInterval(checkAllStreamStatuses, 5 * 60 * 1000);
+
+// Storage handler functions
 
 async function uploadToGCS(musicFile, coverFile, metadata) {
     console.log('🌩️  Uploading to Google Cloud Storage...');
@@ -662,9 +803,8 @@ async function uploadStemsToStorage(stemFiles, metadata, storageType) {
                     }
                     break;
                 case STORAGE_MODES.CLOUDINARY:
-                    if (isCloudinaryConfigured) {
-                        uploadResult = await uploadSingleStemToCloudinary(stemFile, metadata, stemName);
-                    }
+                    // Cloudinary removed - only GCS supported
+                    throw new Error('Cloudinary support has been removed');
                     break;
                 default:
                     uploadResult = {
@@ -710,37 +850,261 @@ async function uploadSingleStemToGCS(stemFile, metadata, stemName) {
     };
 }
 
-// Upload single stem to Cloudinary
-async function uploadSingleStemToCloudinary(stemFile, metadata, stemName) {
+
+
+// Video thumbnail generation function
+async function generateVideoThumbnail(videoBuffer, outputPath) {
     return new Promise((resolve, reject) => {
-        const uploadOptions = {
-            resource_type: 'video', // Cloudinary uses 'video' for audio
-            public_id: `stems/${Date.now()}_${metadata.title || 'unknown'}_${stemName}`,
-            tags: ['stem', stemName, metadata.title || 'unknown'],
-            context: {
-                title: metadata.title || 'Unknown',
-                stemType: stemName,
-                uploadDate: metadata.uploadDate || new Date().toISOString()
+        const tempVideoPath = path.join(__dirname, 'temp-processing', `temp_video_${Date.now()}.mp4`);
+        
+        // Ensure temp directory exists
+        fsExtra.ensureDirSync(path.dirname(tempVideoPath));
+        
+        // Write video buffer to temporary file
+        fs.writeFileSync(tempVideoPath, videoBuffer);
+        
+        ffmpeg(tempVideoPath)
+            .screenshots({
+                timestamps: ['50%'], // Take screenshot at 50% of video duration
+                filename: 'thumbnail.jpg',
+                folder: path.dirname(outputPath),
+                size: '800x450'
+            })
+            .on('end', () => {
+                // Clean up temp video file
+                fs.unlinkSync(tempVideoPath);
+                
+                // Rename the generated screenshot to the desired output path
+                const generatedPath = path.join(path.dirname(outputPath), 'thumbnail.jpg');
+                if (fs.existsSync(generatedPath)) {
+                    fs.renameSync(generatedPath, outputPath);
+                    resolve(outputPath);
+                } else {
+                    reject(new Error('Thumbnail was not generated'));
+                }
+            })
+            .on('error', (err) => {
+                // Clean up temp video file
+                if (fs.existsSync(tempVideoPath)) {
+                    fs.unlinkSync(tempVideoPath);
+                }
+                reject(err);
+            });
+    });
+}
+
+// Generate thumbnail buffer for upload to cloud storage
+async function generateVideoThumbnailBuffer(videoBuffer) {
+    return new Promise((resolve, reject) => {
+        const tempVideoPath = path.join(__dirname, 'temp-processing', `temp_video_${Date.now()}.mp4`);
+        const tempThumbnailPath = path.join(__dirname, 'temp-processing', `temp_thumbnail_${Date.now()}.jpg`);
+        
+        // Ensure temp directory exists
+        fsExtra.ensureDirSync(path.dirname(tempVideoPath));
+        
+        // Write video buffer to temporary file
+        fs.writeFileSync(tempVideoPath, videoBuffer);
+        
+        ffmpeg(tempVideoPath)
+            .screenshots({
+                timestamps: ['50%'],
+                filename: path.basename(tempThumbnailPath),
+                folder: path.dirname(tempThumbnailPath),
+                size: '800x450'
+            })
+            .on('end', () => {
+                // Clean up temp video file
+                fs.unlinkSync(tempVideoPath);
+                
+                if (fs.existsSync(tempThumbnailPath)) {
+                    const thumbnailBuffer = fs.readFileSync(tempThumbnailPath);
+                    fs.unlinkSync(tempThumbnailPath); // Clean up temp thumbnail file
+                    resolve(thumbnailBuffer);
+                } else {
+                    reject(new Error('Thumbnail was not generated'));
+                }
+            })
+            .on('error', (err) => {
+                // Clean up temp files
+                if (fs.existsSync(tempVideoPath)) {
+                    fs.unlinkSync(tempVideoPath);
+                }
+                if (fs.existsSync(tempThumbnailPath)) {
+                    fs.unlinkSync(tempThumbnailPath);
+                }
+                reject(err);
+            });
+    });
+}
+
+// Video upload functions (similar to music uploads)
+async function uploadVideoToGCS(videoFile, thumbnailFile, metadata) {
+    console.log('🌩️  Uploading video to Google Cloud Storage...');
+    
+    try {
+        const bucket = gcsStorage.bucket(process.env.GCS_BUCKET_NAME);
+        const timestamp = Date.now();
+        
+        // Upload video file
+        const videoFileName = `videos/${timestamp}_${videoFile.originalname}`;
+        const videoFileRef = bucket.file(videoFileName);
+        
+        console.log(`📤 Uploading video file: ${videoFileName} (${videoFile.size} bytes)`);
+        await videoFileRef.save(videoFile.buffer, {
+            metadata: {
+                contentType: videoFile.mimetype,
+                metadata: {
+                    originalName: videoFile.originalname,
+                    uploadDate: metadata.uploadDate || new Date().toISOString(),
+                    title: metadata.title || videoFile.originalname.replace(/\.[^/.]+$/, '')
+                }
             }
+        });
+        
+        console.log('✅ Video uploaded to GCS (private)');
+        
+        // Generate or upload thumbnail
+        let thumbnailFileName = null;
+        let thumbnailUrl = null;
+        
+        if (thumbnailFile) {
+            // Use provided thumbnail
+            try {
+                thumbnailFileName = `video-thumbnails/${timestamp}_${thumbnailFile.originalname}`;
+                const thumbnailFileRef = bucket.file(thumbnailFileName);
+                
+                console.log(`📤 Uploading provided thumbnail: ${thumbnailFileName} (${thumbnailFile.size} bytes)`);
+                await thumbnailFileRef.save(thumbnailFile.buffer, {
+                    metadata: {
+                        contentType: thumbnailFile.mimetype,
+                        metadata: {
+                            originalName: thumbnailFile.originalname,
+                            uploadDate: new Date().toISOString()
+                        }
+                    }
+                });
+                
+                console.log('✅ Thumbnail uploaded to GCS (private)');
+                thumbnailUrl = await generateSignedUrl(thumbnailFileName, 24);
+            } catch (error) {
+                console.error('❌ Thumbnail upload failed:', error.message);
+            }
+        } else {
+            // Auto-generate thumbnail
+            try {
+                console.log('🎬 Generating thumbnail from video...');
+                const thumbnailBuffer = await generateVideoThumbnailBuffer(videoFile.buffer);
+                
+                thumbnailFileName = `video-thumbnails/${timestamp}_auto_thumbnail.jpg`;
+                const thumbnailFileRef = bucket.file(thumbnailFileName);
+                
+                console.log(`📤 Uploading auto-generated thumbnail: ${thumbnailFileName}`);
+                await thumbnailFileRef.save(thumbnailBuffer, {
+                    metadata: {
+                        contentType: 'image/jpeg',
+                        metadata: {
+                            originalName: 'auto_thumbnail.jpg',
+                            uploadDate: new Date().toISOString(),
+                            autoGenerated: 'true'
+                        }
+                    }
+                });
+                
+                console.log('✅ Auto-generated thumbnail uploaded to GCS');
+                thumbnailUrl = await generateSignedUrl(thumbnailFileName, 24);
+            } catch (error) {
+                console.error('❌ Auto thumbnail generation failed:', error.message);
+            }
+        }
+        
+        // Generate signed URL for video
+        const streamUrl = await generateSignedUrl(videoFileName, 24);
+        
+        return {
+            id: `gcs_video_${timestamp}`,
+            name: videoFile.originalname,
+            title: metadata.title || videoFile.originalname.replace(/\.[^/.]+$/, ''),
+            fileName: videoFile.originalname,
+            size: videoFile.size,
+            uploadDate: metadata.uploadDate || new Date().toISOString(),
+            dateAdded: new Date().toISOString(),
+            gcsFileName: videoFileName,
+            gcsThumbnailFileName: thumbnailFileName,
+            streamUrl: streamUrl,
+            thumbnailUrl: thumbnailUrl,
+            storageType: 'gcs',
+            source: 'upload'
         };
         
-        cloudinary.uploader.upload_stream(uploadOptions, (error, result) => {
-            if (error) {
-                reject(error);
-            } else {
-                resolve({
-                    fileName: result.public_id,
-                    url: result.secure_url
-                });
-            }
-        }).end(stemFile.buffer);
-    });
+    } catch (error) {
+        console.error('❌ GCS video upload error:', error);
+        throw new Error(`Video upload failed: ${error.message}`);
+    }
+}
+
+
+
+async function uploadVideoToLocal(videoFile, thumbnailFile, metadata) {
+    console.log('💾 Uploading video to local storage...');
+    
+    const timestamp = Date.now();
+    const videoFileName = `${timestamp}_${videoFile.originalname}`;
+    const videoPath = path.join(__dirname, '..', 'uploads', 'videos', videoFileName);
+    
+    // Ensure upload directory exists
+    fsExtra.ensureDirSync(path.dirname(videoPath));
+    
+    // Write video file
+    fs.writeFileSync(videoPath, videoFile.buffer);
+    
+    let thumbnailFileName = null;
+    let thumbnailUrl = null;
+    
+    if (thumbnailFile) {
+        // Use provided thumbnail
+        thumbnailFileName = `${timestamp}_${thumbnailFile.originalname}`;
+        const thumbnailPath = path.join(__dirname, '..', 'uploads', 'video-thumbnails', thumbnailFileName);
+        fsExtra.ensureDirSync(path.dirname(thumbnailPath));
+        fs.writeFileSync(thumbnailPath, thumbnailFile.buffer);
+        thumbnailUrl = `/uploads/video-thumbnails/${thumbnailFileName}`;
+        console.log('✅ Provided thumbnail saved locally');
+    } else {
+        // Auto-generate thumbnail
+        try {
+            console.log('🎬 Generating thumbnail from video...');
+            thumbnailFileName = `${timestamp}_auto_thumbnail.jpg`;
+            const thumbnailPath = path.join(__dirname, '..', 'uploads', 'video-thumbnails', thumbnailFileName);
+            fsExtra.ensureDirSync(path.dirname(thumbnailPath));
+            
+            await generateVideoThumbnail(videoFile.buffer, thumbnailPath);
+            thumbnailUrl = `/uploads/video-thumbnails/${thumbnailFileName}`;
+            console.log('✅ Auto-generated thumbnail saved locally');
+        } catch (error) {
+            console.error('❌ Auto thumbnail generation failed:', error.message);
+        }
+    }
+    
+    return {
+        id: `local_video_${timestamp}`,
+        name: videoFile.originalname,
+        title: metadata.title || videoFile.originalname.replace(/\.[^/.]+$/, ''),
+        fileName: videoFile.originalname,
+        size: videoFile.size,
+        uploadDate: metadata.uploadDate || new Date().toISOString(),
+        dateAdded: new Date().toISOString(),
+        streamUrl: `/uploads/videos/${videoFileName}`,
+        thumbnailUrl: thumbnailUrl,
+        localFileName: videoFileName,
+        localThumbnailFileName: thumbnailFileName,
+        storageType: 'local',
+        source: 'upload'
+    };
 }
 
 // Updated upload endpoint
 app.post('/api/upload', requireAdmin, upload.fields([
     { name: 'musicFile', maxCount: 1 },
-    { name: 'coverImage', maxCount: 1 }
+    { name: 'coverFile', maxCount: 1 }
 ]), async (req, res) => {
     console.log('📤 File upload attempt');
     console.log('📊 Request size:', req.get('Content-Length') || 'Unknown');
@@ -752,7 +1116,7 @@ app.post('/api/upload', requireAdmin, upload.fields([
         }
 
         const musicFile = req.files.musicFile[0];
-        const coverFile = req.files.coverImage ? req.files.coverImage[0] : null;
+        const coverFile = req.files.coverFile ? req.files.coverFile[0] : null;
         
         console.log(`Uploading: ${musicFile.originalname} (${musicFile.size} bytes)`);
         if (coverFile) {
@@ -766,27 +1130,11 @@ app.post('/api/upload', requireAdmin, upload.fields([
 
         let fileData;
         
-        // Route to appropriate storage backend
-        switch (storageMode) {
-            case STORAGE_MODES.GCS:
-                if (!isGCSConfigured) {
-                    throw new Error('Google Cloud Storage not configured');
-                }
-                fileData = await uploadToGCS(musicFile, coverFile, metadata);
-                break;
-                
-            case STORAGE_MODES.CLOUDINARY:
-                if (!isCloudinaryConfigured) {
-                    throw new Error('Cloudinary not configured');
-                }
-                fileData = await uploadToCloudinary(musicFile, coverFile, metadata);
-                break;
-                
-            case STORAGE_MODES.LOCAL:
-            default:
-                fileData = await uploadToLocal(musicFile, coverFile, metadata);
-                break;
+        // Route to GCS only
+        if (!isGCSConfigured) {
+            throw new Error('Google Cloud Storage not configured');
         }
+        fileData = await uploadToGCS(musicFile, coverFile, metadata);
 
         // Process stems automatically if enabled
         if (process.env.ENABLE_STEM_PROCESSING === 'true') {
@@ -940,21 +1288,9 @@ app.delete('/api/files/:fileId', requireAdmin, async (req, res) => {
                 console.error('❌ GCS deletion failed:', gcsError);
                 // Continue with local deletion even if GCS deletion fails
             }
-        } else if (file.storageType === 'cloudinary' && isCloudinaryConfigured) {
-            console.log('☁️  Deleting from Cloudinary...');
-            try {
-                if (file.cloudinaryId) {
-                await cloudinary.uploader.destroy(file.cloudinaryId, { resource_type: 'auto' });
-                console.log('✅ Music file deleted from Cloudinary');
-                }
-                
-                if (file.coverCloudinaryId) {
-                    await cloudinary.uploader.destroy(file.coverCloudinaryId, { resource_type: 'image' });
-                    console.log('✅ Cover image deleted from Cloudinary');
-                }
-            } catch (cloudinaryError) {
-                console.error('❌ Cloudinary deletion failed:', cloudinaryError);
-            }
+        } else if (file.storageType === 'cloudinary') {
+            // Cloudinary support has been removed - skip deletion
+            console.log('⚠️  Cloudinary file found but Cloudinary support has been removed');
         }
         
         // Remove from local array
@@ -995,7 +1331,6 @@ app.get('/api/files', async (req, res) => {
         files: filesWithUrls,
         storageMode: storageMode,
         gcsConfigured: isGCSConfigured,
-        cloudinaryConfigured: isCloudinaryConfigured,
         demoMode: storageMode === STORAGE_MODES.LOCAL
     });
 });
@@ -1234,26 +1569,9 @@ app.post('/api/process-stems', async (req, res) => {
             await gcsFile.download({ destination: inputFilePath });
             console.log('✅ Downloaded file from GCS for processing');
             
-        } else if (file.storageType === 'cloudinary' && isCloudinaryConfigured) {
-            // Download from Cloudinary
-            const https = require('https');
-            const http = require('http');
-            inputFilePath = path.join(tempDir, `temp_${Date.now()}.${path.extname(file.name)}`);
-            
-            await new Promise((resolve, reject) => {
-                const protocol = file.streamUrl.startsWith('https:') ? https : http;
-                const fileStream = fs.createWriteStream(inputFilePath);
-                
-                protocol.get(file.streamUrl, (response) => {
-                    response.pipe(fileStream);
-                    fileStream.on('finish', () => {
-                        fileStream.close();
-                        resolve();
-                    });
-                }).on('error', reject);
-            });
-            
-            console.log('✅ Downloaded file from Cloudinary for processing');
+        } else if (file.storageType === 'cloudinary') {
+            // Cloudinary support has been removed
+            return res.status(400).json({ error: 'Cloudinary files are no longer supported for processing' });
             
         } else {
             return res.status(400).json({ error: 'File not available for processing' });
@@ -1305,22 +1623,310 @@ app.post('/api/process-stems', async (req, res) => {
     }
 });
 
+// Video Management Endpoints
+app.get('/api/videos', async (req, res) => {
+    console.log(`📼 Returning ${videoFiles.length} video files`);
+    
+    // Filter out fake video entries that are actually streams (have YouTube URLs)
+    const realVideoFiles = videoFiles.filter(video => 
+        video.source !== 'stream' && 
+        !video.originalStreamId &&
+        (!video.streamUrl || !video.streamUrl.includes('youtube.com'))
+    );
+    
+    console.log(`📼 Filtered to ${realVideoFiles.length} real video files (removed ${videoFiles.length - realVideoFiles.length} stream-converted entries)`);
+    
+    // For GCS videos, generate fresh signed URLs  
+    const videosWithUrls = await Promise.all(realVideoFiles.map(async (video) => {
+        if (video.storageType === 'gcs' && isGCSConfigured && video.gcsFileName) {
+            const streamUrl = await generateSignedUrl(video.gcsFileName, 24);
+            let thumbnailUrl = video.thumbnailUrl;
+            
+            // Generate fresh signed URL for thumbnail if it exists
+            if (video.gcsThumbnailFileName) {
+                thumbnailUrl = await generateSignedUrl(video.gcsThumbnailFileName, 24);
+            }
+            
+            return { ...video, streamUrl, thumbnailUrl };
+        }
+        return video;
+    }));
+    
+    res.json({ 
+        videos: videosWithUrls,
+        storageMode: storageMode
+    });
+});
+
+app.post('/api/videos', requireAdmin, (req, res) => {
+    console.log('📼 Video upload request received');
+    
+    upload.fields([
+        { name: 'video', maxCount: 1 },
+        { name: 'thumbnail', maxCount: 1 }
+    ])(req, res, async (err) => {
+        if (err) {
+            console.error('❌ Video upload error:', err);
+            return res.status(400).json({ error: 'Video upload failed: ' + err.message });
+        }
+        
+        try {
+            const videoFile = req.files?.video?.[0];
+            const thumbnailFile = req.files?.thumbnail?.[0];
+            const { title } = req.body;
+            
+            if (!videoFile) {
+                return res.status(400).json({ error: 'No video file provided' });
+            }
+            
+            console.log(`📤 Processing video upload: ${videoFile.originalname} (${videoFile.size} bytes)`);
+            
+            // Upload to storage (similar to music but for videos)
+            let uploadResult;
+            const metadata = {
+                title: title || videoFile.originalname.replace(/\.[^/.]+$/, ''),
+                uploadDate: new Date().toISOString()
+            };
+            
+            if (!isGCSConfigured) {
+                throw new Error('Google Cloud Storage not configured');
+            }
+            uploadResult = await uploadVideoToGCS(videoFile, thumbnailFile, metadata);
+            
+            videoFiles.push(uploadResult);
+            saveVideoFiles();
+            
+            console.log('✅ Video upload completed:', uploadResult.title);
+            res.json({ success: true, video: uploadResult });
+            
+        } catch (error) {
+            console.error('❌ Video upload error:', error);
+            res.status(500).json({ error: 'Video upload failed: ' + error.message });
+        }
+    });
+});
+
+app.delete('/api/videos/:videoId', requireAdmin, async (req, res) => {
+    try {
+        const videoId = decodeURIComponent(req.params.videoId);
+        console.log(`🗑️ Deleting video: ${videoId}`);
+        
+        const videoIndex = videoFiles.findIndex(v => v.id === videoId);
+        if (videoIndex === -1) {
+            return res.status(404).json({ error: 'Video not found' });
+        }
+        
+        const video = videoFiles[videoIndex];
+        
+        // Delete from GCS storage if not a converted stream
+        if (video.source !== 'stream' && video.storageType === 'gcs' && isGCSConfigured && video.gcsFileName) {
+            const bucket = gcsStorage.bucket(process.env.GCS_BUCKET_NAME);
+            await bucket.file(video.gcsFileName).delete().catch(console.error);
+            if (video.gcsThumbnailFileName) {
+                await bucket.file(video.gcsThumbnailFileName).delete().catch(console.error);
+            }
+        }
+        
+        videoFiles.splice(videoIndex, 1);
+        saveVideoFiles();
+        
+        res.json({ success: true, message: 'Video deleted successfully' });
+        
+    } catch (error) {
+        console.error('❌ Video delete error:', error);
+        res.status(500).json({ error: 'Delete failed: ' + error.message });
+    }
+});
+
+// Stream Management Endpoints  
+app.get('/api/streams', async (req, res) => {
+    console.log(`📺 Returning ${liveStreams.length} live streams`);
+    
+    // Check if we need to update stream statuses
+    if (liveStreams.length > 0) {
+        await checkAllStreamStatuses();
+    }
+    
+    // Include stream-derived videos in the streams tab
+    const streamVideos = videoFiles.filter(video => 
+        video.source === 'stream' || video.isStreamVideo
+    );
+    
+    console.log(`📺 Including ${streamVideos.length} stream-derived videos`);
+    
+    // Convert stream videos back to stream format for display in streams tab
+    const streamVideosAsStreams = streamVideos
+        .filter(video => {
+            // Validate that we have proper YouTube data
+            const hasYouTubeId = video.youtubeId || extractYouTubeId(video.streamUrl);
+            if (!hasYouTubeId) {
+                console.warn(`⚠️ Skipping stream video with missing/invalid YouTube ID:`, {
+                    id: video.id,
+                    title: video.title,
+                    streamUrl: video.streamUrl
+                });
+                return false;
+            }
+            return true;
+        })
+        .map(video => {
+            // Extract YouTube ID if missing
+            const youtubeId = video.youtubeId || extractYouTubeId(video.streamUrl);
+            
+            return {
+                id: video.id,
+                title: video.title,
+                thumbnail: video.thumbnailUrl,
+                youtubeId: youtubeId,
+                youtubeUrl: video.streamUrl,
+                isLive: false,
+                viewers: null,
+                description: video.description,
+                status: 'archived',
+                archivedDate: video.dateAdded,
+                isStreamVideo: true // Flag to identify these as converted videos
+            };
+        });
+    
+    // Combine all streams (active + archived) with stream-derived videos
+    const allStreams = [...liveStreams, ...streamVideosAsStreams];
+    
+    console.log(`📺 Total streams (active + archived): ${allStreams.length}`);
+    
+    res.json({ 
+        streams: allStreams,
+        hasLiveStream: liveStreams.some(stream => stream.isLive)
+    });
+});
+
+app.get('/api/streams/admin', requireAdmin, async (req, res) => {
+    console.log(`📺 Admin: Returning all ${liveStreams.length} streams`);
+    
+    try {
+        if (liveStreams.length > 0) {
+            await checkAllStreamStatuses();
+        }
+        
+        res.json({ 
+            streams: liveStreams
+        });
+    } catch (error) {
+        console.error('❌ Error checking stream statuses:', error);
+        // Return streams anyway, even if status check failed
+        res.json({ 
+            streams: liveStreams,
+            statusCheckFailed: true
+        });
+    }
+});
+
+app.post('/api/streams', requireAdmin, async (req, res) => {
+    try {
+        const { youtubeUrl } = req.body;
+        
+        if (!youtubeUrl) {
+            return res.status(400).json({ error: 'YouTube URL is required' });
+        }
+        
+        const youtubeId = extractYouTubeId(youtubeUrl);
+        if (!youtubeId) {
+            return res.status(400).json({ error: 'Invalid YouTube URL' });
+        }
+        
+        // Check if stream already exists
+        const existingStream = liveStreams.find(s => s.youtubeId === youtubeId);
+        if (existingStream) {
+            return res.status(400).json({ error: 'Stream already exists' });
+        }
+        
+        console.log(`📺 Adding new stream: ${youtubeId}`);
+        
+        // Get video info from YouTube API (fallback if no API key)
+        const videoInfo = await getYouTubeVideoInfo(youtubeId);
+        
+        let streamData;
+        if (videoInfo) {
+            // Use YouTube API data
+            streamData = {
+                id: `stream_${Date.now()}_${youtubeId}`,
+                title: videoInfo.title,
+                thumbnail: videoInfo.thumbnail,
+                youtubeId: youtubeId,
+                youtubeUrl: youtubeUrl,
+                isLive: videoInfo.isLive,
+                viewers: videoInfo.viewerCount,
+                description: videoInfo.description,
+                status: videoInfo.status === 'live' ? 'live' : videoInfo.status === 'upcoming' ? 'upcoming' : 'ended',
+                startTime: videoInfo.startTime,
+                endTime: videoInfo.endTime
+            };
+        } else {
+            // Fallback: create stream with basic info (no YouTube API)
+            console.log('⚠️ YouTube API unavailable, creating stream with basic info');
+            streamData = {
+                id: `stream_${Date.now()}_${youtubeId}`,
+                title: `YouTube Stream ${youtubeId}`,
+                thumbnail: `https://img.youtube.com/vi/${youtubeId}/maxresdefault.jpg`, // YouTube thumbnail URL
+                youtubeId: youtubeId,
+                youtubeUrl: youtubeUrl,
+                isLive: true, // Assume live for now
+                viewers: null,
+                description: 'Live stream (YouTube API unavailable)',
+                status: 'live',
+                startTime: new Date().toISOString(),
+                endTime: null
+            };
+        }
+        
+        liveStreams.push(streamData);
+        saveLiveStreams();
+        
+        console.log(`✅ Stream added: ${streamData.title} (${streamData.status})`);
+        res.json({ success: true, stream: streamData });
+        
+    } catch (error) {
+        console.error('❌ Stream add error:', error);
+        res.status(500).json({ error: 'Failed to add stream: ' + error.message });
+    }
+});
+
+app.delete('/api/streams/:streamId', requireAdmin, async (req, res) => {
+    try {
+        const streamId = decodeURIComponent(req.params.streamId);
+        console.log(`🗑️ Deleting stream: ${streamId}`);
+        
+        const streamIndex = liveStreams.findIndex(s => s.id === streamId);
+        if (streamIndex === -1) {
+            return res.status(404).json({ error: 'Stream not found' });
+        }
+        
+        liveStreams.splice(streamIndex, 1);
+        saveLiveStreams();
+        
+        res.json({ success: true, message: 'Stream deleted successfully' });
+        
+    } catch (error) {
+        console.error('❌ Stream delete error:', error);
+        res.status(500).json({ error: 'Delete failed: ' + error.message });
+    }
+});
+
+
+
 // Serve the frontend
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
+    res.sendFile(path.join(__dirname, '..', 'index.html'));
 });
 
 // Health check
 app.get('/api/health', (req, res) => {
     res.json({ 
         status: 'OK',
-        mode: storageMode === STORAGE_MODES.GCS ? 'Production (Google Cloud Storage)' :
-              storageMode === STORAGE_MODES.CLOUDINARY ? 'Production (Cloudinary)' : 'Demo Mode',
+        mode: 'Production (Google Cloud Storage)',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
         filesCount: musicFiles.length,
         gcsConfigured: isGCSConfigured,
-        cloudinaryConfigured: isCloudinaryConfigured,
         adminPassword: process.env.ADMIN_PASSWORD || 'admin123'
     });
 });
@@ -1366,14 +1972,11 @@ const server = app.listen(PORT, () => {
     console.log(`🗄️  Storage mode: ${storageMode.toUpperCase()}`);
     console.log(`📁 Loaded ${musicFiles.length} music files`);
     
-    if (storageMode === STORAGE_MODES.GCS && isGCSConfigured) {
+    if (isGCSConfigured) {
         console.log(`🌩️  Google Cloud Storage ready with bucket: ${process.env.GCS_BUCKET_NAME}`);
         console.log(`📊 File size limit: 500MB`);
-    } else if (storageMode === STORAGE_MODES.CLOUDINARY && isCloudinaryConfigured) {
-        console.log(`☁️  Cloudinary ready`);
-        console.log(`📊 File size limit: 200MB`);
     } else {
-        console.log(`💾 Demo mode - configure GCS or Cloudinary for real uploads`);
+        console.log(`⚠️  Google Cloud Storage not configured`);
     }
 });
 
@@ -1382,4 +1985,4 @@ server.timeout = 1200000;
 server.keepAliveTimeout = 1200000;
 server.headersTimeout = 1210000;
 
-module.exports = app; 
+export default app; 

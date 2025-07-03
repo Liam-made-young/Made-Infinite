@@ -54,7 +54,7 @@ def process_with_demucs_v4(input_file, output_dir):
             '-d', 'cpu',       # Use CPU (Cloud Run has 2 CPU cores)
             '--mp3',           # Output as MP3 for smaller files
             '--mp3-bitrate', '192',  # Good quality vs size balance
-            '--segment', '20',  # Larger chunks since we have 8GB RAM
+            '--segment', '7',   # Max segment for htdemucs is 7.8, use 7 to be safe
             '--overlap', '0.2', # Better quality with more overlap
             '-j', '2',         # Use both CPU cores
             '-o', str(output_dir),
@@ -143,7 +143,7 @@ def process_with_demucs_light(input_file, output_dir):
             '--segment', '5',     # Very small chunks
             '--overlap', '0.05',  # Minimal overlap
             '-j', '1',            # Single job
-            '--no-split',         # Don't split into chunks
+            # Remove --no-split as it conflicts with --segment
             '-o', str(output_dir),
             str(input_file)
         ]
